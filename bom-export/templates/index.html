@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>NetBox Standort Export</title>
+</head>
+<body>
+    <h1>BOM Export</h1>
+
+    <form action="/export" method="get">
+        <label>Standort:</label>
+        <select name="site_id" required>
+            {% for site in sites %}
+                <option value="{{ site.id }}">{{ site.name }}</option>
+            {% endfor %}
+        </select>
+
+        <button type="submit">Excel exportieren</button>
+    </form>
+</body>
+</html>

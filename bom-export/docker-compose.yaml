@@ -1,0 +1,11 @@
+version: "3.9"
+
+services:
+  netbox-exporter:
+    image: netbox-exporter
+    container_name: netbox-exporter
+    restart: unless-stopped
+
+    environment:
+      NETBOX_URL: https://netbox.example.local
+      NETBOX_API_TOKEN: xxxxxxxxxxxxxxxxx
