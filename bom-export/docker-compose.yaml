@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
   netbox-exporter:
     image: netbox-exporter
@@ -8,4 +6,4 @@ services:
 
     environment:
       NETBOX_URL: https://netbox.example.local
-      NETBOX_API_TOKEN: xxxxxxxxxxxxxxxxx
+      NETBOX_TOKEN: xxxxxxxxxxxxxxxxx

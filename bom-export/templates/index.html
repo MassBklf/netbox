@@ -1,20 +1,45 @@
 <!DOCTYPE html>
-<html>
+<html lang="de">
 <head>
-    <title>NetBox Standort Export</title>
+    <meta charset="UTF-8">
+    <title>NetBox BOM Export</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 40px;
+        }
+        select, button {
+            padding: 8px;
+            font-size: 14px;
+        }
+    </style>
 </head>
 <body>
-    <h1>BOM Export</h1>
 
-    <form action="/export" method="get">
-        <label>Standort:</label>
-        <select name="site_id" required>
-            {% for site in sites %}
-                <option value="{{ site.id }}">{{ site.name }}</option>
-            {% endfor %}
-        </select>
+<h2>NetBox BOM Export</h2>
 
-        <button type="submit">Excel exportieren</button>
-    </form>
+<form method="post" action="/bom-export/export">
+    <label for="site">Standort auswählen:</label><br><br>
+
+    <select name="site_slug" id="site" required onchange="updateSiteName()">
+        {% for site in sites %}
+            <option value="{{ site.slug }}">{{ site.name }}</option>
+        {% endfor %}
+    </select>
+
+    <input type="hidden" name="site_name" id="site_name" value="{{ sites[0].name if sites }}">
+
+    <br><br>
+    <button type="submit">Excel exportieren</button>
+</form>
+
+<script>
+function updateSiteName() {
+    const select = document.getElementById("site");
+    const nameField = document.getElementById("site_name");
+    nameField.value = select.options[select.selectedIndex].text;
+}
+</script>
+
 </body>
 </html>
