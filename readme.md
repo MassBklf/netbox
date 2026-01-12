@@ -45,3 +45,6 @@ location /export/ {
     proxy_set_header X-Forwarded-Proto $scheme;
 }
 ```
+
+### Example
+<img width="801" height="397" alt="image" src="https://github.com/user-attachments/assets/72fc2502-926a-403c-8fed-3ff2ee0c2d53" />
