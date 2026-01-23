@@ -2,8 +2,11 @@ import os
 import io
 import datetime
 import requests
-import pandas as pd
 from flask import Flask, render_template, request, Response
+import openpyxl
+from openpyxl.styles import Font, Alignment, Border, Side, PatternFill
+from openpyxl.utils import get_column_letter
+from itertools import groupby
 
 # ======================
 # Konfiguration
@@ -88,10 +91,99 @@ def export():
             )
         })
 
-    df = pd.DataFrame(rows)
+    # Sort for grouping
+    rows.sort(key=lambda x: (x["Location"] or "", x["Rack"] or "", x["Device Name"] or ""))
 
-    if not df.empty:
-        df = df.sort_values(by=["Location", "Rack", "Device Name"])
+    # Excel Generation
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "BOM"
+
+    # Define styles
+    site_header_font = Font(bold=True, size=16)
+    location_header_font = Font(bold=True, size=14)
+    rack_header_font = Font(bold=True, size=12)
+    header_font = Font(bold=True)
+
+    center_alignment = Alignment(horizontal="center", vertical="center")
+    left_alignment = Alignment(horizontal="left", vertical="center")
+
+    border = Border(left=Side(style='thin'),
+                    right=Side(style='thin'),
+                    top=Side(style='thin'),
+                    bottom=Side(style='thin'))
+
+    current_row = 1
+
+    # 1. Site Header
+    ws.merge_cells(start_row=current_row, start_column=1, end_row=current_row, end_column=5)
+    cell = ws.cell(row=current_row, column=1, value=f"Site: {site_name}")
+    cell.font = site_header_font
+    cell.alignment = center_alignment
+    current_row += 1
+
+    def get_location(d): return d["Location"] or ""
+    def get_rack(d): return d["Rack"] or ""
+
+    for location, loc_devices in groupby(rows, key=get_location):
+        loc_devices = list(loc_devices)
+
+        # 2. Location Header
+        display_location = location if location else "No Location"
+
+        ws.merge_cells(start_row=current_row, start_column=1, end_row=current_row, end_column=5)
+        cell = ws.cell(row=current_row, column=1, value=f"Location: {display_location}")
+        cell.font = location_header_font
+        cell.alignment = left_alignment
+        cell.fill = PatternFill(start_color="DDDDDD", end_color="DDDDDD", fill_type="solid")
+        current_row += 1
+
+        # Group by Rack
+        for rack, rack_devices in groupby(loc_devices, key=get_rack):
+            rack_devices = list(rack_devices)
+
+            # 3. Rack Header (only if rack exists)
+            if rack:
+                ws.merge_cells(start_row=current_row, start_column=1, end_row=current_row, end_column=5)
+                cell = ws.cell(row=current_row, column=1, value=f"Rack: {rack}")
+                cell.font = rack_header_font
+                cell.alignment = left_alignment
+                cell.fill = PatternFill(start_color="EEEEEE", end_color="EEEEEE", fill_type="solid")
+                current_row += 1
+
+            # 4. Column Headers
+            headers = ["Device Name", "Manufacturer", "Device Type", "Serial Number", "Role"]
+            for col_idx, header in enumerate(headers, 1):
+                cell = ws.cell(row=current_row, column=col_idx, value=header)
+                cell.font = header_font
+                cell.border = border
+            current_row += 1
+
+            # 5. Device Rows
+            for d in rack_devices:
+                ws.cell(row=current_row, column=1, value=d["Device Name"]).border = border
+                ws.cell(row=current_row, column=2, value=d["Manufacturer"]).border = border
+                ws.cell(row=current_row, column=3, value=d["Device Type"]).border = border
+                ws.cell(row=current_row, column=4, value=d["Serial Number"]).border = border
+                ws.cell(row=current_row, column=5, value=d["Role"]).border = border
+                current_row += 1
+
+            # Space between groups
+            current_row += 1
+
+    # Auto-adjust column widths
+    for i, col in enumerate(ws.columns, 1):
+        column_letter = get_column_letter(i)
+        max_length = 0
+        for cell in col:
+            try:
+                if cell.value:
+                    if len(str(cell.value)) > max_length:
+                        max_length = len(str(cell.value))
+            except:
+                pass
+        adjusted_width = (max_length + 2)
+        ws.column_dimensions[column_letter].width = min(adjusted_width, 50)
 
     # Dateiname
     date_str = datetime.datetime.now().strftime("%Y-%m-%d")
@@ -100,7 +192,7 @@ def export():
 
     # Excel erzeugen
     buffer = io.BytesIO()
-    df.to_excel(buffer, index=False)
+    wb.save(buffer)
     excel_bytes = buffer.getvalue()
 
     # Archivieren
