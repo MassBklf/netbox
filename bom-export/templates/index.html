@@ -12,9 +12,43 @@
             padding: 8px;
             font-size: 14px;
         }
+        #session-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(255, 255, 255, 0.95);
+            z-index: 9999;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            text-align: center;
+        }
+        #login-btn {
+            display: none;
+            margin-top: 20px;
+            padding: 10px 20px;
+            font-size: 16px;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            cursor: pointer;
+            text-decoration: none;
+            border-radius: 4px;
+        }
+        #login-btn:hover {
+            background-color: #0056b3;
+        }
     </style>
 </head>
 <body>
+
+<div id="session-overlay">
+    <h3 id="overlay-msg">Prüfe NetBox Session...</h3>
+    <a id="login-btn" href="{{ netbox_url }}/login/?next={{ request.url }}">Bitte bei NetBox anmelden</a>
+</div>
 
 <h2>NetBox BOM Export</h2>
 
@@ -39,6 +73,40 @@ function updateSiteName() {
     const nameField = document.getElementById("site_name");
     nameField.value = select.options[select.selectedIndex].text;
 }
+
+document.addEventListener("DOMContentLoaded", function() {
+    const netboxUrl = "{{ netbox_url }}";
+    // Ensure no trailing slash for base URL, then add endpoint
+    const baseUrl = netboxUrl.replace(/\/$/, "");
+    const apiUrl = baseUrl + "/api/dcim/sites/?limit=1";
+
+    fetch(apiUrl, {
+        method: 'GET',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        credentials: 'include'
+    })
+    .then(response => {
+        if (response.ok) {
+            document.getElementById("session-overlay").style.display = "none";
+        } else {
+            showLogin();
+        }
+    })
+    .catch(error => {
+        console.error("NetBox Session Check Error:", error);
+        showLogin();
+    });
+
+    function showLogin() {
+        document.getElementById("overlay-msg").innerText = "Keine aktive NetBox Session gefunden.";
+        const btn = document.getElementById("login-btn");
+        btn.style.display = "inline-block";
+        // Update href just in case
+        btn.href = baseUrl + "/login/?next=" + encodeURIComponent(window.location.href);
+    }
+});
 </script>
 
 </body>

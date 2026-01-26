@@ -54,7 +54,7 @@ def get_all_results(endpoint, params=None):
 def index():
     sites = get_all_results("dcim/sites/")
     sites = sorted(sites, key=lambda s: s["name"])
-    return render_template("index.html", sites=sites)
+    return render_template("index.html", sites=sites, netbox_url=NETBOX_URL)
 
 
 @app.route("/bom-export/export", methods=["POST"])
