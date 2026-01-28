@@ -1,0 +1,99 @@
+#!/bin/sh
+
+# ================= KONFIGURATION =================
+# 1. Name des Quell-Datastores
+SOURCE_DS="/vmfs/volumes/datastore1"
+
+# 2. Name des Ziel-Datastores (USB-Platte)
+TARGET_DS="/vmfs/volumes/USB_TRANSFER/VM_Backups"
+
+# 3. Liste der VMs (Exakte Namen, keine Leerzeichen!)
+VM_LIST="Webserver_01 DB_Server_02"
+
+# Timeout für Shutdown in Sekunden (z.B. 300 = 5 Minuten warten, dann hart ausschalten)
+SHUTDOWN_TIMEOUT=300
+
+# ================= START DES SKRIPTS =================
+
+mkdir -p "$TARGET_DS"
+
+for VM in $VM_LIST; do
+    echo "###############################################"
+    echo "Bearbeite VM: $VM"
+    
+    # 1. VM-ID herausfinden (Nötig für Power-Befehle)
+    # Wir greppen nach dem Namen und nehmen die erste Spalte (die ID)
+    VM_ID=$(vim-cmd vmsvc/getallvms | grep -w "$VM" | awk '{print $1}')
+    
+    if [ -z "$VM_ID" ]; then
+        echo "FEHLER: Konnte VM-ID für '$VM' nicht finden. Ist der Name korrekt?"
+        continue
+    fi
+    
+    echo "-> VM-ID gefunden: $VM_ID"
+
+    # 2. Prüfen, ob VM läuft
+    POWER_STATE=$(vim-cmd vmsvc/power.getstate "$VM_ID" | grep "Powered on")
+    WAS_RUNNING=0
+
+    if [ -n "$POWER_STATE" ]; then
+        echo "-> VM läuft aktuell. Starte Shutdown..."
+        WAS_RUNNING=1
+        
+        # Versuche sanften Shutdown (VMware Tools)
+        vim-cmd vmsvc/power.shutdown "$VM_ID"
+        
+        # Warteschleife bis VM aus ist
+        TIMER=0
+        while vim-cmd vmsvc/power.getstate "$VM_ID" | grep -q "Powered on"; do
+            sleep 5
+            TIMER=$((TIMER+5))
+            echo "   ...warte auf Shutdown ($TIMER s)"
+            
+            if [ $TIMER -ge $SHUTDOWN_TIMEOUT ]; then
+                echo "-> WARNUNG: Shutdown Timeout erreicht! Erzwinge Power-Off."
+                vim-cmd vmsvc/power.off "$VM_ID"
+                break
+            fi
+        done
+        echo "-> VM ist jetzt ausgeschaltet."
+    else
+        echo "-> VM ist bereits ausgeschaltet."
+    fi
+
+    # 3. EXPORT / BACKUP (Wie zuvor)
+    SRC_DIR="$SOURCE_DS/$VM"
+    DST_DIR="$TARGET_DS/$VM"
+
+    if [ ! -d "$SRC_DIR" ]; then
+        echo "FEHLER: Quellordner $SRC_DIR existiert nicht!"
+        continue
+    fi
+
+    echo "-> Erstelle Zielordner: $DST_DIR"
+    mkdir -p "$DST_DIR"
+
+    echo "-> Kopiere Konfigurationsdateien (.vmx, .nvram)..."
+    cp "$SRC_DIR/"*.vmx "$DST_DIR/"
+    cp "$SRC_DIR/"*.nvram "$DST_DIR/"
+    if ls "$SRC_DIR/"*.vmsd >/dev/null 2>&1; then cp "$SRC_DIR/"*.vmsd "$DST_DIR/"; fi
+
+    echo "-> Suche und klone Festplatten (Thin Provisioning)..."
+    for DISK in $(ls "$SRC_DIR/"*.vmdk | grep -v -- "-flat.vmdk" | grep -v -- "-sesparse.vmdk" | grep -v -- "-delta.vmdk"); do
+        DISK_FILENAME=$(basename "$DISK")
+        echo "   -> Klone Disk: $DISK_FILENAME"
+        vmkfstools -i "$DISK" -d thin "$DST_DIR/$DISK_FILENAME"
+    done
+
+    # 4. Neustart (falls sie vorher lief)
+    if [ $WAS_RUNNING -eq 1 ]; then
+        echo "-> Starte VM wieder..."
+        vim-cmd vmsvc/power.on "$VM_ID"
+        echo "-> VM Startbefehl gesendet."
+    fi
+    
+    echo "Fertig mit $VM"
+done
+
+echo "###############################################"
+echo "Alle Aufgaben abgeschlossen."
