@@ -1,97 +1,126 @@
 #!/bin/sh
 
 # ================= KONFIGURATION =================
-# 1. Name des Quell-Datastores
-SOURCE_DS="/vmfs/volumes/datastore1"
+# Quell-Datastore (z.B. der interne Speicher)
+SOURCE_DS="/vmfs/volumes/esxi02-datastore1"
 
-# 2. Name des Ziel-Datastores (USB-Platte)
+# Ziel-Datastore (deine USB-Platte)
 TARGET_DS="/vmfs/volumes/USB_TRANSFER/VM_Backups"
 
-# 3. Liste der VMs (Exakte Namen, keine Leerzeichen!)
-VM_LIST="Webserver_01 DB_Server_02"
+# Liste der VMs (Exakte Namen, keine Leerzeichen!)
+VM_LIST="shs-cub01-mfc01"
 
-# Timeout für Shutdown in Sekunden (z.B. 300 = 5 Minuten warten, dann hart ausschalten)
+# Timeout für Shutdown in Sekunden
 SHUTDOWN_TIMEOUT=300
-
-# ================= START DES SKRIPTS =================
+# =================================================
 
 mkdir -p "$TARGET_DS"
 
 for VM in $VM_LIST; do
     echo "###############################################"
     echo "Bearbeite VM: $VM"
-    
-    # 1. VM-ID herausfinden (Nötig für Power-Befehle)
-    # Wir greppen nach dem Namen und nehmen die erste Spalte (die ID)
-    VM_ID=$(vim-cmd vmsvc/getallvms | grep -w "$VM" | awk '{print $1}')
-    
-    if [ -z "$VM_ID" ]; then
-        echo "FEHLER: Konnte VM-ID für '$VM' nicht finden. Ist der Name korrekt?"
+
+    # -------------------------------------------------
+    # 1. PRÄZISE ID-ERMITTLUNG (Der Fix)
+    # -------------------------------------------------
+    # Wir nutzen awk, um exakt Spalte 2 (Name) zu prüfen.
+    # Wenn Name == VM, dann drucke Spalte 1 (ID).
+    VM_ID=$(vim-cmd vmsvc/getallvms | awk -v target="$VM" '$2 == target {print $1}')
+
+    # Falls wir immer noch mehrere IDs bekommen (sehr unwahrscheinlich) oder gar keine:
+    # Wir nehmen nur die erste Zeile, falls doppelt, und prüfen auf Leer.
+    VM_ID=$(echo "$VM_ID" | head -n 1)
+
+    if [ -z "$VM_ID" ] || [ "$VM_ID" = "Vmid" ]; then
+        echo "FEHLER: Konnte VM-ID für '$VM' nicht finden (oder Name ist mehrdeutig)."
         continue
     fi
-    
     echo "-> VM-ID gefunden: $VM_ID"
 
-    # 2. Prüfen, ob VM läuft
+    # -------------------------------------------------
+    # 2. AUTO-SHUTDOWN
+    # -------------------------------------------------
     POWER_STATE=$(vim-cmd vmsvc/power.getstate "$VM_ID" | grep "Powered on")
     WAS_RUNNING=0
 
     if [ -n "$POWER_STATE" ]; then
-        echo "-> VM läuft aktuell. Starte Shutdown..."
+        echo "-> VM läuft. Starte Shutdown..."
         WAS_RUNNING=1
-        
-        # Versuche sanften Shutdown (VMware Tools)
         vim-cmd vmsvc/power.shutdown "$VM_ID"
         
-        # Warteschleife bis VM aus ist
         TIMER=0
         while vim-cmd vmsvc/power.getstate "$VM_ID" | grep -q "Powered on"; do
             sleep 5
             TIMER=$((TIMER+5))
             echo "   ...warte auf Shutdown ($TIMER s)"
-            
             if [ $TIMER -ge $SHUTDOWN_TIMEOUT ]; then
-                echo "-> WARNUNG: Shutdown Timeout erreicht! Erzwinge Power-Off."
+                echo "-> WARNUNG: Timeout! Erzwinge Power-Off."
                 vim-cmd vmsvc/power.off "$VM_ID"
                 break
             fi
         done
-        echo "-> VM ist jetzt ausgeschaltet."
     else
-        echo "-> VM ist bereits ausgeschaltet."
+        echo "-> VM ist bereits aus."
     fi
 
-    # 3. EXPORT / BACKUP (Wie zuvor)
+    # -------------------------------------------------
+    # 3. SMART EXPORT (Snapshots konsolidieren)
+    # -------------------------------------------------
     SRC_DIR="$SOURCE_DS/$VM"
     DST_DIR="$TARGET_DS/$VM"
 
-    if [ ! -d "$SRC_DIR" ]; then
-        echo "FEHLER: Quellordner $SRC_DIR existiert nicht!"
-        continue
+    # Zielordner bereinigen (Wichtig!)
+    if [ -d "$DST_DIR" ]; then
+        echo "-> Lösche alten Zielordner..."
+        rm -rf "$DST_DIR"
     fi
-
-    echo "-> Erstelle Zielordner: $DST_DIR"
     mkdir -p "$DST_DIR"
 
-    echo "-> Kopiere Konfigurationsdateien (.vmx, .nvram)..."
-    cp "$SRC_DIR/"*.vmx "$DST_DIR/"
-    cp "$SRC_DIR/"*.nvram "$DST_DIR/"
-    if ls "$SRC_DIR/"*.vmsd >/dev/null 2>&1; then cp "$SRC_DIR/"*.vmsd "$DST_DIR/"; fi
+    echo "-> Kopiere Config (.vmx, .nvram)..."
+    cp "$SRC_DIR/"*.nvram "$DST_DIR/" 2>/dev/null
+    cp "$SRC_DIR/"*.vmsd "$DST_DIR/" 2>/dev/null
+    
+    # VMX kopieren zur Bearbeitung
+    cp "$SRC_DIR/$VM.vmx" "$DST_DIR/$VM.vmx"
 
-    echo "-> Suche und klone Festplatten (Thin Provisioning)..."
-    for DISK in $(ls "$SRC_DIR/"*.vmdk | grep -v -- "-flat.vmdk" | grep -v -- "-sesparse.vmdk" | grep -v -- "-delta.vmdk"); do
-        DISK_FILENAME=$(basename "$DISK")
-        echo "   -> Klone Disk: $DISK_FILENAME"
-        vmkfstools -i "$DISK" -d thin "$DST_DIR/$DISK_FILENAME"
+    echo "-> Analysiere aktive Festplatten (Snapshot-Kette)..."
+    
+    # Wir lesen aus der VMX, welche vmdk aktuell eingebunden ist (das ist oft der Snapshot 0000x)
+    grep ".fileName" "$SRC_DIR/$VM.vmx" | grep ".vmdk" | while read -r line ; do
+        
+        CURRENT_DISK=$(echo "$line" | awk -F'"' '{print $2}')
+        
+        # Sauberer Zielname ohne Snapshot-Nummern
+        BASENAME=$(basename "$CURRENT_DISK" .vmdk)
+        CLEAN_NAME=$(echo "$BASENAME" | sed 's/-[0-9]\{6\}//')
+        TARGET_DISK_NAME="${CLEAN_NAME}.vmdk"
+
+        echo "   -> Quelle: $CURRENT_DISK"
+        echo "   -> Ziel:   $TARGET_DISK_NAME (Thin & Consolidated)"
+
+        # Der Zaubertrick: vmkfstools liest die Snapshot-Kette und schreibt EINE saubere Datei
+        vmkfstools -i "$SRC_DIR/$CURRENT_DISK" -d thin "$DST_DIR/$TARGET_DISK_NAME"
+
+        if [ $? -eq 0 ]; then
+            # VMX auf dem Stick anpassen: Alter Snapshot-Name -> Neuer sauberer Name
+            sed -i "s|$CURRENT_DISK|$TARGET_DISK_NAME|g" "$DST_DIR/$VM.vmx"
+        else
+            echo "   [FEHLER] Klonen fehlgeschlagen!"
+        fi
     done
 
-    # 4. Neustart (falls sie vorher lief)
+    # VMX bereinigen (Swap Pfade und UUIDs entfernen für sauberen Import)
+    sed -i '/sched.swap.derivedName/d' "$DST_DIR/$VM.vmx"
+    sed -i '/uuid.location/d' "$DST_DIR/$VM.vmx"
+
+    # -------------------------------------------------
+    # 4. RESTORE STATE (Wieder hochfahren)
+    # -------------------------------------------------
     if [ $WAS_RUNNING -eq 1 ]; then
         echo "-> Starte VM wieder..."
         vim-cmd vmsvc/power.on "$VM_ID"
-        echo "-> VM Startbefehl gesendet."
     fi
-    
+
     echo "Fertig mit $VM"
 done
 
