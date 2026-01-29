@@ -1,0 +1,21 @@
+# 1. Variablen setzen (ANPASSEN!)
+SOURCE_FOLDER="/vmfs/volumes/DEIN_TEMP_DATASTORE/Temp_Export/Name_der_VM"
+TARGET_FOLDER="/vmfs/volumes/USB_TRANSFER/VM_Backups/Name_der_VM"
+
+# 2. Zielordner erstellen
+mkdir -p "$TARGET_FOLDER"
+
+# 3. Kleine Dateien kopieren (Config, NVRAM etc.)
+cp "$SOURCE_FOLDER/"*.vmx "$TARGET_FOLDER/"
+cp "$SOURCE_FOLDER/"*.nvram "$TARGET_FOLDER/"
+cp "$SOURCE_FOLDER/"*.vmsd "$TARGET_FOLDER/" 2>/dev/null
+
+# 4. Festplatten klonen (Thin Provisioning beibehalten!)
+# Wir suchen alle .vmdk Dateien im Quellordner (ohne -flat)
+for DISK in $(ls "$SOURCE_FOLDER/"*.vmdk | grep -v -- "-flat.vmdk" | grep -v -- "-sesparse.vmdk"); do
+    DISK_NAME=$(basename "$DISK")
+    echo "Kopiere Disk: $DISK_NAME nach USB (Thin)..."
+    vmkfstools -i "$DISK" -d thin "$TARGET_FOLDER/$DISK_NAME"
+done
+
+echo "Fertig mit dieser VM."
