@@ -21,14 +21,14 @@ for VM in $VM_LIST; do
     echo "Bearbeite VM: $VM"
 
     # -------------------------------------------------
-    # 1. PRÄZISE ID-ERMITTLUNG (Der Fix)
+    # 1. PRÄZISE ID-ERMITTLUNG (Der Fix für Backups)
     # -------------------------------------------------
     # Wir nutzen awk, um exakt Spalte 2 (Name) zu prüfen.
     # Wenn Name == VM, dann drucke Spalte 1 (ID).
     VM_ID=$(vim-cmd vmsvc/getallvms | awk -v target="$VM" '$2 == target {print $1}')
 
     # Falls wir immer noch mehrere IDs bekommen (sehr unwahrscheinlich) oder gar keine:
-    # Wir nehmen nur die erste Zeile, falls doppelt, und prüfen auf Leer.
+    # Wir nehmen nur die erste Zeile.
     VM_ID=$(echo "$VM_ID" | head -n 1)
 
     if [ -z "$VM_ID" ] || [ "$VM_ID" = "Vmid" ]; then
@@ -92,6 +92,7 @@ for VM in $VM_LIST; do
         
         # Sauberer Zielname ohne Snapshot-Nummern
         BASENAME=$(basename "$CURRENT_DISK" .vmdk)
+        # Entferne Snapshot-Nummern aus dem Zielnamen
         CLEAN_NAME=$(echo "$BASENAME" | sed 's/-[0-9]\{6\}//')
         TARGET_DISK_NAME="${CLEAN_NAME}.vmdk"
 
@@ -99,6 +100,7 @@ for VM in $VM_LIST; do
         echo "   -> Ziel:   $TARGET_DISK_NAME (Thin & Consolidated)"
 
         # Der Zaubertrick: vmkfstools liest die Snapshot-Kette und schreibt EINE saubere Datei
+        # Wir ignorieren Digest-Fehler, da wir nur die Daten wollen
         vmkfstools -i "$SRC_DIR/$CURRENT_DISK" -d thin "$DST_DIR/$TARGET_DISK_NAME"
 
         if [ $? -eq 0 ]; then
