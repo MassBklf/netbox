@@ -1,21 +1,50 @@
-# 1. Variablen setzen (ANPASSEN!)
-SOURCE_FOLDER="/vmfs/volumes/DEIN_TEMP_DATASTORE/Temp_Export/Name_der_VM"
-TARGET_FOLDER="/vmfs/volumes/USB_TRANSFER/VM_Backups/Name_der_VM"
+#!/bin/sh
 
-# 2. Zielordner erstellen
-mkdir -p "$TARGET_FOLDER"
+# ================= KONFIGURATION =================
+# Hier den Namen deines lokalen Datastores eintragen!
+# Beispiel: /vmfs/volumes/datastore1/VMs
+SOURCE_PARENT="/vmfs/volumes/DEIN_LOKALER_DATASTORE/VMs"
 
-# 3. Kleine Dateien kopieren (Config, NVRAM etc.)
-cp "$SOURCE_FOLDER/"*.vmx "$TARGET_FOLDER/"
-cp "$SOURCE_FOLDER/"*.nvram "$TARGET_FOLDER/"
-cp "$SOURCE_FOLDER/"*.vmsd "$TARGET_FOLDER/" 2>/dev/null
+# Ziel auf dem USB-Stick
+TARGET_PARENT="/vmfs/volumes/USB_TRANSFER/VM_Backups"
+# =================================================
 
-# 4. Festplatten klonen (Thin Provisioning beibehalten!)
-# Wir suchen alle .vmdk Dateien im Quellordner (ohne -flat)
-for DISK in $(ls "$SOURCE_FOLDER/"*.vmdk | grep -v -- "-flat.vmdk" | grep -v -- "-sesparse.vmdk"); do
-    DISK_NAME=$(basename "$DISK")
-    echo "Kopiere Disk: $DISK_NAME nach USB (Thin)..."
-    vmkfstools -i "$DISK" -d thin "$TARGET_FOLDER/$DISK_NAME"
+# Sicherstellen, dass der USB-Stick gemountet ist
+if [ ! -d "$TARGET_PARENT" ]; then
+    mkdir -p "$TARGET_PARENT"
+fi
+
+# Schleife durch alle Ordner im VMs-Verzeichnis
+for VM_PATH in "$SOURCE_PARENT"/*; do
+    if [ -d "$VM_PATH" ]; then
+        # Ordnernamen herausfinden (z.B. "Webserver")
+        VM_NAME=$(basename "$VM_PATH")
+        
+        echo "========================================"
+        echo "Verarbeite VM: $VM_NAME"
+        
+        # Zielordner auf USB erstellen
+        TARGET_DIR="$TARGET_PARENT/$VM_NAME"
+        mkdir -p "$TARGET_DIR"
+        
+        # 1. Kleine Config-Dateien kopieren (schnell)
+        echo "-> Kopiere Configs..."
+        cp "$VM_PATH/"*.vmx "$TARGET_DIR/" 2>/dev/null
+        cp "$VM_PATH/"*.nvram "$TARGET_DIR/" 2>/dev/null
+        cp "$VM_PATH/"*.vmsd "$TARGET_DIR/" 2>/dev/null
+        
+        # 2. Festplatten klonen (Thin Provisioning!)
+        # Findet alle vmdks, ignoriert aber die -flat Dateien
+        echo "-> Klone Festplatten (Thin)..."
+        for DISK in $(ls "$VM_PATH/"*.vmdk 2>/dev/null | grep -v -- "-flat.vmdk" | grep -v -- "-sesparse.vmdk" | grep -v -- "-digest.vmdk"); do
+            DISK_FILENAME=$(basename "$DISK")
+            echo "   ... $DISK_FILENAME"
+            vmkfstools -i "$DISK" -d thin "$TARGET_DIR/$DISK_FILENAME"
+        done
+        
+        echo "-> Fertig mit $VM_NAME"
+    fi
 done
 
-echo "Fertig mit dieser VM."
+echo "========================================"
+echo "Alle VMs aus dem Ordner übertragen."
