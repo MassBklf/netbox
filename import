@@ -4,33 +4,45 @@
 # QUELLE: Der Ordner auf dem USB-Stick
 SOURCE_PARENT="/vmfs/volumes/USB_TRANSFER/VM_Backups"
 
-# ZIEL: Dein lokaler Datastore auf dem neuen Server (ANPASSEN!!!)
-# Beispiel: /vmfs/volumes/datastore1
+# ZIEL: Dein lokaler Datastore (ANPASSEN!)
 TARGET_DATASTORE="/vmfs/volumes/datastore1"
 # =================================================
 
-echo "Starte Restore von USB nach $TARGET_DATASTORE..."
+echo "Starte Restore (VMS ÜBERSPRINGEN, FALLS VORHANDEN)..."
 
-# Schleife durch alle VM-Backups auf dem USB-Stick
+# Prüfen ob Quelle existiert
+if [ ! -d "$SOURCE_PARENT" ]; then
+    echo "FEHLER: Quellordner $SOURCE_PARENT nicht gefunden!"
+    exit 1
+fi
+
+# Schleife durch alle VM-Backups
 for VM_PATH in "$SOURCE_PARENT"/*; do
     if [ -d "$VM_PATH" ]; then
         VM_NAME=$(basename "$VM_PATH")
         TARGET_DIR="$TARGET_DATASTORE/$VM_NAME"
         
         echo "----------------------------------------"
-        echo "Wiederherstellung von: $VM_NAME"
+        echo "Prüfe: $VM_NAME"
         
-        # Zielordner erstellen
+        # --- NEU: SICHERHEITS-CHECK ---
+        if [ -d "$TARGET_DIR" ]; then
+            echo "ACHTUNG: Ordner existiert bereits ($TARGET_DIR)."
+            echo "-> ÜBERSPRINGE diese VM, um Daten nicht zu überschreiben."
+            continue
+        fi
+        # ------------------------------
+        
+        # Ab hier läuft der normale Restore
         mkdir -p "$TARGET_DIR"
         
-        # 1. Kleine Config-Dateien kopieren
+        # 1. Configs kopieren
         echo "-> Kopiere Configs..."
         cp "$VM_PATH/"*.vmx "$TARGET_DIR/" 2>/dev/null
         cp "$VM_PATH/"*.nvram "$TARGET_DIR/" 2>/dev/null
         cp "$VM_PATH/"*.vmsd "$TARGET_DIR/" 2>/dev/null
         
-        # 2. Festplatten importieren
-        # Wir nutzen vmkfstools für sauberen Import
+        # 2. Disks importieren (Thin)
         echo "-> Importiere Disks..."
         for DISK in $(ls "$VM_PATH/"*.vmdk 2>/dev/null | grep -v -- "-flat.vmdk" | grep -v -- "-sesparse.vmdk"); do
             DISK_FILENAME=$(basename "$DISK")
@@ -38,11 +50,10 @@ for VM_PATH in "$SOURCE_PARENT"/*; do
             vmkfstools -i "$DISK" -d thin "$TARGET_DIR/$DISK_FILENAME"
         done
         
-        # 3. VM im ESXi registrieren (Der magische Schritt!)
-        # Damit taucht sie sofort in der GUI auf
+        # 3. Registrieren
         VMX_FILE="$TARGET_DIR/$VM_NAME.vmx"
         if [ -f "$VMX_FILE" ]; then
-            echo "-> Registriere VM im Inventory..."
+            echo "-> Registriere VM..."
             vim-cmd solo/registervm "$VMX_FILE"
         fi
         
@@ -51,4 +62,4 @@ for VM_PATH in "$SOURCE_PARENT"/*; do
 done
 
 echo "========================================"
-echo "ALLE VMS IMPORTIERT UND REGISTRIERT."
+echo "FERTIG."
