@@ -1,0 +1,44 @@
+# 1. vSwitch0 konfigurieren
+# Wir stellen sicher, dass vmnic0 der aktive Uplink ist
+esxcli network vswitch standard uplink add -v vSwitch0 -u vmnic0 2>/dev/null
+
+# MTU auf 1500 (Standard) setzen
+esxcli network vswitch standard set -v vSwitch0 -m 1500
+
+# Sicherheitseinstellungen auf "Accept" setzen (damit Promiscuous Mode etc. erlaubt sind, falls nötig)
+esxcli network vswitch standard policy security set -v vSwitch0 --allow-promiscuous yes --allow-mac-change yes --allow-forged-transmits yes
+
+# ---------------------------------------------------------
+# 2. Portgruppen erstellen (Namen exakt wie im Screenshot)
+# ---------------------------------------------------------
+
+create_pg() {
+    PG_NAME="$1"
+    VLAN_ID="$2"
+    echo "Erstelle Portgruppe: $PG_NAME (VLAN $VLAN_ID)..."
+    # Portgruppe erstellen
+    esxcli network vswitch standard portgroup add -v vSwitch0 -p "$PG_NAME" 2>/dev/null
+    # VLAN ID setzen
+    esxcli network vswitch standard portgroup set -p "$PG_NAME" -v "$VLAN_ID"
+}
+
+# --- Deine Liste ---
+create_pg "SES-CLASSROOM" 1260
+create_pg "SES-CUB03" 1220
+create_pg "vCenter-HA" 1111
+create_pg "DCT-CUB07" 1300
+create_pg "SHS" 1100
+create_pg "SES-CUB07" 1200
+create_pg "CIC-DIS-NWTS" 1235
+create_pg "CIC-DIS-ASWS" 1236
+create_pg "CIC" 1400
+create_pg "TST" 1010
+create_pg "AVS" 1003
+create_pg "mgmt" 1001
+create_pg "vMotion" 100
+
+# "Management Network" existiert schon, wir setzen nur das VLAN (Vorsicht: siehe Warnung unten!)
+# Ich kommentiere das hier aus Sicherheitsgründen aus, damit du dich nicht aussperrst.
+# esxcli network vswitch standard portgroup set -p "Management Network" -v 1001
+
+echo "Netzwerk Portgruppen angelegt."
