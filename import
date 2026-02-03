@@ -1,53 +1,72 @@
 #!/bin/sh
 
 # ================= KONFIGURATION =================
-# QUELLE: Der Ordner auf dem USB-Stick
-SOURCE_PARENT="/vmfs/volumes/USB_TRANSFER/VM_Backups"
+# QUELLE: Pfad auf dem USB-Stick (Laut Screenshot: /VMs/)
+SOURCE_PARENT="/vmfs/volumes/USB_NEW/VMs"
 
-# ZIEL: Dein lokaler Datastore (ANPASSEN!)
-TARGET_DATASTORE="/vmfs/volumes/datastore1"
+# ZIEL: Dein lokaler Datastore auf dem neuen Server (ANPASSEN!)
+# z.B. datastore1 oder NVMe-Store
+TARGET_DATASTORE="/vmfs/volumes/esxi01-datastore1"
 # =================================================
 
-echo "Starte Restore (VMS ÜBERSPRINGEN, FALLS VORHANDEN)..."
+echo "Starte Restore (MIT DIGEST FILTER)..."
 
-# Prüfen ob Quelle existiert
 if [ ! -d "$SOURCE_PARENT" ]; then
     echo "FEHLER: Quellordner $SOURCE_PARENT nicht gefunden!"
+    echo "Bitte prüfen: Heißt der Ordner auf dem Stick 'VMs' oder 'VM_Backups'?"
     exit 1
 fi
 
-# Schleife durch alle VM-Backups
+# Schleife durch alle VMs auf dem Stick
 for VM_PATH in "$SOURCE_PARENT"/*; do
     if [ -d "$VM_PATH" ]; then
         VM_NAME=$(basename "$VM_PATH")
         TARGET_DIR="$TARGET_DATASTORE/$VM_NAME"
         
         echo "----------------------------------------"
-        echo "Prüfe: $VM_NAME"
+        echo "Bearbeite: $VM_NAME"
         
-        # --- NEU: SICHERHEITS-CHECK ---
+        # Check ob Ziel schon existiert
         if [ -d "$TARGET_DIR" ]; then
-            echo "ACHTUNG: Ordner existiert bereits ($TARGET_DIR)."
-            echo "-> ÜBERSPRINGE diese VM, um Daten nicht zu überschreiben."
+            echo "ACHTUNG: Zielordner existiert schon. ÜBERSPRINGE $VM_NAME."
             continue
         fi
-        # ------------------------------
         
-        # Ab hier läuft der normale Restore
         mkdir -p "$TARGET_DIR"
         
         # 1. Configs kopieren
         echo "-> Kopiere Configs..."
         cp "$VM_PATH/"*.vmx "$TARGET_DIR/" 2>/dev/null
         cp "$VM_PATH/"*.nvram "$TARGET_DIR/" 2>/dev/null
-        cp "$VM_PATH/"*.vmsd "$TARGET_DIR/" 2>/dev/null
         
-        # 2. Disks importieren (Thin)
-        echo "-> Importiere Disks..."
-        for DISK in $(ls "$VM_PATH/"*.vmdk 2>/dev/null | grep -v -- "-flat.vmdk" | grep -v -- "-sesparse.vmdk"); do
-            DISK_FILENAME=$(basename "$DISK")
-            echo "   ... $DISK_FILENAME"
-            vmkfstools -i "$DISK" -d thin "$TARGET_DIR/$DISK_FILENAME"
+        # 2. Festplatten importieren (DER WICHTIGE FILTER!)
+        echo "-> Suche saubere Disks..."
+        
+        # Wir listen alle .vmdk Dateien auf
+        for DISK in $(ls "$VM_PATH/"*.vmdk 2>/dev/null); do
+            
+            # FILTER 1: Ignoriere alles mit "digest" im Namen (Horizon Cache)
+            if echo "$DISK" | grep -q "digest"; then
+                echo "   [SKIP] Ignoriere Müll-Datei: $(basename $DISK)"
+                continue
+            fi
+            
+            # FILTER 2: Ignoriere "-flat.vmdk" (werden automatisch von vmkfstools mitgenommen)
+            if echo "$DISK" | grep -q "\-flat.vmdk"; then
+                continue
+            fi
+            
+            # Wenn wir hier sind, ist es eine ECHTE Festplatte
+            DISK_NAME=$(basename "$DISK")
+            echo "   [OK] Importiere Disk: $DISK_NAME"
+            
+            # Importieren und gleich 'Thin' machen
+            vmkfstools -i "$DISK" -d thin "$TARGET_DIR/$DISK_NAME"
+            
+            # Fehlerprüfung beim Import
+            if [ $? -ne 0 ]; then
+                echo "   !!! FEHLER beim Import von $DISK_NAME !!!"
+            fi
         done
         
         # 3. Registrieren
@@ -55,11 +74,13 @@ for VM_PATH in "$SOURCE_PARENT"/*; do
         if [ -f "$VMX_FILE" ]; then
             echo "-> Registriere VM..."
             vim-cmd solo/registervm "$VMX_FILE"
+        else
+            echo "WARNUNG: Keine .vmx Datei gefunden!"
         fi
         
-        echo "-> [OK] $VM_NAME wiederhergestellt."
+        echo "-> Fertig mit $VM_NAME."
     fi
 done
 
 echo "========================================"
-echo "FERTIG."
+echo "RESTORE ABGESCHLOSSEN."
