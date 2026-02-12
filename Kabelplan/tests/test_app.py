@@ -53,8 +53,8 @@ class TestApp(unittest.TestCase):
                         {
                             "id": 100,
                             "label": "Cable1",
-                            "termination_a": {"device": {"id": 1, "name": "Dev1"}, "name": "Eth0"},
-                            "termination_b": {"device": {"id": 2, "name": "Dev2"}, "name": "Eth0"}
+                            "termination_a": {"id": 10, "device": {"id": 1, "name": "Dev1"}, "name": "Eth0"},
+                            "termination_b": {"id": 20, "device": {"id": 2, "name": "Dev2"}, "name": "Eth0"}
                         }
                     ],
                     "next": None
@@ -69,13 +69,25 @@ class TestApp(unittest.TestCase):
         self.assertIn('nodes', data)
         self.assertIn('edges', data)
 
-        # Verify device 1 (fetched) is in nodes
-        self.assertTrue(any(n['id'] == 1 for n in data['nodes']))
-        # Verify device 2 (external but connected) is in nodes
-        self.assertTrue(any(n['id'] == 2 for n in data['nodes']))
-        # Verify edge
-        self.assertTrue(any('Cable1' in e['label'] for e in data['edges']))
-        self.assertTrue(any('Eth0 <-> Eth0' in e['label'] for e in data['edges']))
+        # Verify nodes exist: 2 Devices + 2 Interfaces = 4 nodes
+        node_ids = [n['id'] for n in data['nodes']]
+        self.assertIn(1, node_ids)      # Dev1
+        self.assertIn(2, node_ids)      # Dev2
+        self.assertIn('if_10', node_ids) # Eth0 of Dev1
+        self.assertIn('if_20', node_ids) # Eth0 of Dev2
+
+        # Verify edges exist:
+        # Dev1 -> if_10
+        # Dev2 -> if_20
+        # if_10 -> if_20 (Cable)
+        edge_pairs = [(e['from'], e['to']) for e in data['edges']]
+        self.assertIn((1, 'if_10'), edge_pairs)
+        self.assertIn((2, 'if_20'), edge_pairs)
+        self.assertIn(('if_10', 'if_20'), edge_pairs)
+
+        # Verify Cable Label is on the interface-interface edge
+        cable_edge = next(e for e in data['edges'] if e['from'] == 'if_10' and e['to'] == 'if_20')
+        self.assertIn('Cable1', cable_edge['label'])
 
 if __name__ == '__main__':
     unittest.main()

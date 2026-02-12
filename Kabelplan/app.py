@@ -114,6 +114,7 @@ def get_graph_data():
     nodes = []
     edges = []
     added_device_ids = set()
+    added_interface_ids = set()
 
     for cable in cables:
         term_a = cable.get("termination_a")
@@ -144,60 +145,78 @@ def get_graph_data():
             include_cable = True
 
         if include_cable:
-            # Add Nodes
-            # Process Side A
-            if dev_a_id:
-                if dev_a_id not in added_device_ids:
-                    # If it's in our detailed map, use that.
-                    if dev_a_id in device_map:
-                        d_info = device_map[dev_a_id]
+            # Helper to add Device Node
+            def add_device_node(d_id, d_name):
+                if d_id not in added_device_ids:
+                    if d_id in device_map:
+                        d_info = device_map[d_id]
                         nodes.append({
-                            "id": dev_a_id,
+                            "id": d_id,
                             "label": d_info["name"],
                             "group": d_info["role"],
-                            "title": f"Role: {d_info['role']}<br>Type: {d_info['type']}"
-                        })
-                    else:
-                        # External device (not in our filter but connected)
-                        nodes.append({
-                            "id": dev_a_id,
-                            "label": dev_a_name,
-                            "group": "External",
-                            "title": "External Device"
-                        })
-                    added_device_ids.add(dev_a_id)
-
-            # Process Side B
-            if dev_b_id:
-                if dev_b_id not in added_device_ids:
-                    if dev_b_id in device_map:
-                        d_info = device_map[dev_b_id]
-                        nodes.append({
-                            "id": dev_b_id,
-                            "label": d_info["name"],
-                            "group": d_info["role"],
-                            "title": f"Role: {d_info['role']}<br>Type: {d_info['type']}"
+                            "title": f"Role: {d_info['role']}<br>Type: {d_info['type']}",
+                            "shape": "box",
+                            "font": {"size": 20}
                         })
                     else:
                         nodes.append({
-                            "id": dev_b_id,
-                            "label": dev_b_name,
+                            "id": d_id,
+                            "label": d_name,
                             "group": "External",
-                            "title": "External Device"
+                            "title": "External Device",
+                            "shape": "box",
+                            "font": {"size": 20}
                         })
-                    added_device_ids.add(dev_b_id)
+                    added_device_ids.add(d_id)
 
-            # Add Edge
+            # Helper to add Interface Node and Link to Device
+            def add_interface_node_and_link(d_id, term):
+                # term_id is unique per interface/port in NetBox
+                # We prefix it to avoid collision (though ints shouldn't collide with strings if we use that)
+                # But safer to use strings for all IDs
+                term_id = term.get("id")
+                node_id = f"if_{term_id}"
+
+                if node_id not in added_interface_ids:
+                    nodes.append({
+                        "id": node_id,
+                        "label": term.get("name", "?"),
+                        "group": "Interface",
+                        "shape": "box",
+                        "color": {"background": "white", "border": "black"},
+                        "font": {"size": 10},
+                        "widthConstraint": {"maximum": 100}
+                    })
+                    added_interface_ids.add(node_id)
+
+                    # Link Interface to Device
+                    edges.append({
+                        "from": d_id,
+                        "to": node_id,
+                        "length": 50, # Short distance
+                        "color": "black",
+                        "width": 2
+                    })
+                return node_id
+
             if dev_a_id and dev_b_id:
+                # Add Devices
+                add_device_node(dev_a_id, dev_a_name)
+                add_device_node(dev_b_id, dev_b_name)
+
+                # Add Interfaces
+                if_node_a = add_interface_node_and_link(dev_a_id, term_a)
+                if_node_b = add_interface_node_and_link(dev_b_id, term_b)
+
+                # Add Cable (Interface <-> Interface)
                 cable_label = cable.get("label") or f"#{cable.get('id')}"
-                if_label = f"\n({term_a.get('name', '?')} <-> {term_b.get('name', '?')})"
 
                 edges.append({
-                    "from": dev_a_id,
-                    "to": dev_b_id,
-                    "label": cable_label + if_label,
-                    "title": f"{term_a.get('name', '?')} <--> {term_b.get('name', '?')}",
+                    "from": if_node_a,
+                    "to": if_node_b,
+                    "label": cable_label,
                     "arrows": "to;from",
+                    "length": 200, # Longer distance for cable
                     "font": {"align": "top"}
                 })
 

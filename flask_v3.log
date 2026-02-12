@@ -14,3 +14,14 @@
 127.0.0.1 - - [12/Feb/2026 20:22:34] "GET / HTTP/1.1" 200 -
 127.0.0.1 - - [12/Feb/2026 20:22:34] "GET /static/css/style.css HTTP/1.1" 200 -
 127.0.0.1 - - [12/Feb/2026 20:22:34] "GET /static/js/kabelplan.js HTTP/1.1" 200 -
+ * Detected change in '/app/Kabelplan/app.py', reloading
+ * Restarting with stat
+ * Debugger is active!
+ * Debugger PIN: 436-511-457
+ * Detected change in '/app/Kabelplan/tests/test_app.py', reloading
+ * Restarting with stat
+ * Debugger is active!
+ * Debugger PIN: 436-511-457
+127.0.0.1 - - [12/Feb/2026 20:29:22] "GET / HTTP/1.1" 200 -
+127.0.0.1 - - [12/Feb/2026 20:29:22] "GET /static/css/style.css HTTP/1.1" 200 -
+127.0.0.1 - - [12/Feb/2026 20:29:22] "GET /static/js/kabelplan.js HTTP/1.1" 200 -
