@@ -1,0 +1,11 @@
+services:
+  kabelplan:
+    build: .
+    image: kabelplan-generator
+    container_name: kabelplan-generator
+    restart: unless-stopped
+    ports:
+      - "5001:5000"
+    environment:
+      NETBOX_URL: https://netbox.example.local
+      NETBOX_TOKEN: xxxxxxxxxxxxxxxxx
