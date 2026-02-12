@@ -74,7 +74,8 @@ class TestApp(unittest.TestCase):
         # Verify device 2 (external but connected) is in nodes
         self.assertTrue(any(n['id'] == 2 for n in data['nodes']))
         # Verify edge
-        self.assertTrue(any(e['label'] == 'Cable1' for e in data['edges']))
+        self.assertTrue(any('Cable1' in e['label'] for e in data['edges']))
+        self.assertTrue(any('Eth0 <-> Eth0' in e['label'] for e in data['edges']))
 
 if __name__ == '__main__':
     unittest.main()

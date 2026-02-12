@@ -189,12 +189,16 @@ def get_graph_data():
 
             # Add Edge
             if dev_a_id and dev_b_id:
+                cable_label = cable.get("label") or f"#{cable.get('id')}"
+                if_label = f"\n({term_a.get('name', '?')} <-> {term_b.get('name', '?')})"
+
                 edges.append({
                     "from": dev_a_id,
                     "to": dev_b_id,
-                    "label": cable.get("label") or f"#{cable.get('id')}",
+                    "label": cable_label + if_label,
                     "title": f"{term_a.get('name', '?')} <--> {term_b.get('name', '?')}",
-                    "arrows": "to;from"
+                    "arrows": "to;from",
+                    "font": {"align": "top"}
                 })
 
     return jsonify({"nodes": nodes, "edges": edges})
