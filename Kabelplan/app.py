@@ -1,59 +1,15 @@
 import os
-import requests
+import pynetbox
 from flask import Flask, render_template, request, jsonify
 
 # Configuration
 NETBOX_URL = os.getenv("NETBOX_URL", "http://localhost:8000")
 NETBOX_TOKEN = os.getenv("NETBOX_TOKEN", "")
 
-# Headers
-HEADERS = {}
-if NETBOX_TOKEN:
-    HEADERS["Authorization"] = f"Token {NETBOX_TOKEN}"
-
 app = Flask(__name__)
 
-# --- Helper Functions ---
-
-def netbox_request(endpoint, params=None):
-    """Makes a request to NetBox and handles errors."""
-    url = f"{NETBOX_URL}/api/{endpoint}"
-    try:
-        response = requests.get(url, headers=HEADERS, params=params)
-        response.raise_for_status()
-        return response.json()
-    except requests.exceptions.RequestException as e:
-        print(f"Error fetching {endpoint}: {e}")
-        return None
-
-def get_all_results(endpoint, params=None):
-    """Handles NetBox pagination to fetch all results."""
-    results = []
-
-    # Initial request
-    data = netbox_request(endpoint, params)
-    if not data:
-        return []
-
-    results.extend(data.get("results", []))
-
-    # Handle pagination
-    while data.get("next"):
-        next_url = data["next"]
-        # Remove base URL to get the relative endpoint/params
-        # Or just use the full URL if requests allows it (it does)
-        try:
-            response = requests.get(next_url, headers=HEADERS)
-            response.raise_for_status()
-            data = response.json()
-            results.extend(data.get("results", []))
-        except requests.exceptions.RequestException as e:
-            print(f"Error fetching next page: {e}")
-            break
-
-    return results
-
-# --- Routes ---
+# Initialize NetBox API
+nb = pynetbox.api(NETBOX_URL, token=NETBOX_TOKEN)
 
 @app.route("/")
 def index():
@@ -62,21 +18,23 @@ def index():
 @app.route("/api/filter-options")
 def get_filter_options():
     """Returns Sites, Locations, and Racks for dropdowns."""
-    sites = get_all_results("dcim/sites/")
-    locations = get_all_results("dcim/locations/")
-    racks = get_all_results("dcim/racks/")
+    try:
+        sites = list(nb.dcim.sites.all())
+        locations = list(nb.dcim.locations.all())
+        racks = list(nb.dcim.racks.all())
 
-    return jsonify({
-        "sites": sorted(sites, key=lambda x: x["name"]),
-        "locations": sorted(locations, key=lambda x: x["name"]),
-        "racks": sorted(racks, key=lambda x: x["name"])
-    })
+        return jsonify({
+            "sites": sorted([{"id": s.id, "name": s.name, "slug": s.slug} for s in sites], key=lambda x: x["name"]),
+            "locations": sorted([{"id": l.id, "name": l.name, "site": {"id": l.site.id} if l.site else None} for l in locations], key=lambda x: x["name"]),
+            "racks": sorted([{"id": r.id, "name": r.name, "site": {"id": r.site.id} if r.site else None} for r in racks], key=lambda x: x["name"])
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 @app.route("/api/graph-data")
 def get_graph_data():
     """
     Fetches devices and cables based on filters and returns graph data.
-    Filters: site (slug), location (id), rack (id)
     """
     site_slug = request.args.get("site")
     location_id = request.args.get("location")
@@ -85,142 +43,115 @@ def get_graph_data():
     if not site_slug:
         return jsonify({"error": "Site is required"}), 400
 
-    # 1. Fetch Devices
-    device_params = {"site": site_slug}
-    if location_id:
-        device_params["location_id"] = location_id
-    if rack_id:
-        device_params["rack_id"] = rack_id
+    try:
+        # 1. Fetch Devices
+        device_filter = {"site": site_slug}
+        if location_id:
+            device_filter["location_id"] = location_id
+        if rack_id:
+            device_filter["rack_id"] = rack_id
 
-    devices = get_all_results("dcim/devices/", device_params)
+        devices = list(nb.dcim.devices.filter(**device_filter))
 
-    # Create a map of Device ID -> Device Info for quick lookup
-    device_map = {}
-    for d in devices:
-        device_map[d["id"]] = {
-            "id": d["id"],
-            "name": d["name"] or f"Device {d['id']}",
-            "role": d["device_role"]["name"] if d.get("device_role") else "Unknown",
-            "type": d["device_type"]["model"] if d.get("device_type") else "Unknown",
-            "location": d["location"]["name"] if d.get("location") else None
-        }
+        nodes = []
+        device_ids = set()
 
-    # 2. Fetch Cables
-    # We fetch cables for the site.
-    # If a specific location/rack is selected, we filter cables that connect to our fetched devices.
-    cable_params = {"site": site_slug}
-    cables = get_all_results("dcim/cables/", cable_params)
+        # We need to fetch interfaces for these devices to create ports
+        # Optimization: Fetch all interfaces for the site and filter in memory if needed,
+        # or fetch per device (slow). Better: fetch interfaces for devices in list.
+        # pynetbox filter 'device_id' accepts a list.
 
-    nodes = []
-    edges = []
-    added_device_ids = set()
-    added_interface_ids = set()
+        device_id_list = [d.id for d in devices]
+        if not device_id_list:
+             return jsonify({"nodes": [], "links": []})
 
-    for cable in cables:
-        term_a = cable.get("termination_a")
-        term_b = cable.get("termination_b")
+        # Process Devices
+        for d in devices:
+            device_ids.add(str(d.id))
+            nodes.append({
+                "id": str(d.id),
+                "name": d.name or f"Device {d.id}",
+                "model": d.device_type.model if d.device_type else "Unknown",
+                "role": d.device_role.name if d.device_role else "Unknown",
+                "ports": [] # Will be populated
+            })
 
-        if not term_a or not term_b:
-            continue
+        # 2. Fetch Interfaces (Ports)
+        # Fetching interfaces for all devices in scope
+        # We process in chunks to avoid URL length issues if many devices
+        interfaces = []
+        chunk_size = 50
+        for i in range(0, len(device_id_list), chunk_size):
+            chunk = device_id_list[i:i+chunk_size]
+            interfaces.extend(list(nb.dcim.interfaces.filter(device_id=chunk)))
 
-        # Helper to extract device info from a termination
-        def get_device_info(term):
-            # Check if termination is directly on a device (Interface, ConsolePort, etc.)
-            if isinstance(term, dict) and term.get("device"):
-                return term["device"]["id"], term["device"]["name"]
-            return None, None
+        # Map interfaces to device nodes
+        interface_map = {} # id -> {name, device_id}
 
-        dev_a_id, dev_a_name = get_device_info(term_a)
-        dev_b_id, dev_b_name = get_device_info(term_b)
+        node_map = {n["id"]: n for n in nodes}
 
-        # Filtering Logic
-        include_cable = False
+        for i in interfaces:
+            d_id = str(i.device.id)
+            if d_id in node_map:
+                port_data = {
+                    "id": str(i.id),
+                    "name": i.name,
+                    "type": "copper" # simplistic type
+                }
+                node_map[d_id]["ports"].append(port_data)
+                interface_map[i.id] = {"name": i.name, "device_id": d_id}
 
-        if location_id or rack_id:
-            # Check if at least one device is in our filtered list
-            if (dev_a_id and dev_a_id in device_map) or (dev_b_id and dev_b_id in device_map):
-                include_cable = True
-        else:
-            # Site only: show if at least one device is in the site (which is all of them usually)
-            include_cable = True
+        # 3. Fetch Cables
+        # We fetch cables connected to our devices
+        # Similar chunk approach or fetch by site
+        cables = list(nb.dcim.cables.filter(site=site_slug))
 
-        if include_cable:
-            # Helper to add Device Node
-            def add_device_node(d_id, d_name):
-                if d_id not in added_device_ids:
-                    if d_id in device_map:
-                        d_info = device_map[d_id]
-                        nodes.append({
-                            "id": d_id,
-                            "label": d_info["name"],
-                            "group": d_info["role"],
-                            "title": f"Role: {d_info['role']}<br>Type: {d_info['type']}",
-                            "shape": "box",
-                            "font": {"size": 20}
-                        })
-                    else:
-                        nodes.append({
-                            "id": d_id,
-                            "label": d_name,
-                            "group": "External",
-                            "title": "External Device",
-                            "shape": "box",
-                            "font": {"size": 20}
-                        })
-                    added_device_ids.add(d_id)
+        links = []
 
-            # Helper to add Interface Node and Link to Device
-            def add_interface_node_and_link(d_id, term):
-                # term_id is unique per interface/port in NetBox
-                # We prefix it to avoid collision (though ints shouldn't collide with strings if we use that)
-                # But safer to use strings for all IDs
-                term_id = term.get("id")
-                node_id = f"if_{term_id}"
+        for cable in cables:
+            # We only care if both ends are in our scope (or at least one if we want to show external links)
+            # For now, let's show links where at least one end is in our device list.
 
-                if node_id not in added_interface_ids:
-                    nodes.append({
-                        "id": node_id,
-                        "label": term.get("name", "?"),
-                        "group": "Interface",
-                        "shape": "box",
-                        "color": {"background": "white", "border": "black"},
-                        "font": {"size": 10},
-                        "widthConstraint": {"maximum": 100}
-                    })
-                    added_interface_ids.add(node_id)
+            term_a = cable.a_terminations[0] if cable.a_terminations else None
+            term_b = cable.b_terminations[0] if cable.b_terminations else None
 
-                    # Link Interface to Device
-                    edges.append({
-                        "from": d_id,
-                        "to": node_id,
-                        "length": 50, # Short distance
-                        "color": "black",
-                        "width": 2
-                    })
-                return node_id
+            if not term_a or not term_b:
+                continue
+
+            # Helper to get device/interface ID
+            # In pynetbox, terminations are objects. We check if they are interfaces.
+            # Assuming 'dcim.interface' type.
+
+            def get_term_info(term):
+                if hasattr(term, 'device') and hasattr(term, 'id'):
+                    return str(term.device.id), str(term.id)
+                return None, None
+
+            dev_a_id, int_a_id = get_term_info(term_a)
+            dev_b_id, int_b_id = get_term_info(term_b)
 
             if dev_a_id and dev_b_id:
-                # Add Devices
-                add_device_node(dev_a_id, dev_a_name)
-                add_device_node(dev_b_id, dev_b_name)
+                # Check if visible
+                visible_a = dev_a_id in device_ids
+                visible_b = dev_b_id in device_ids
 
-                # Add Interfaces
-                if_node_a = add_interface_node_and_link(dev_a_id, term_a)
-                if_node_b = add_interface_node_and_link(dev_b_id, term_b)
+                if visible_a and visible_b:
+                    links.append({
+                        "id": str(cable.id),
+                        "source": {"id": dev_a_id, "port": int_a_id},
+                        "target": {"id": dev_b_id, "port": int_b_id},
+                        "label": cable.label or f"#{cable.id}",
+                        "color": cable.color or "black"
+                    })
+                # Note: Handling external links (one end visible) requires adding "External Node" logic
+                # For this iteration, we stick to internal links.
 
-                # Add Cable (Interface <-> Interface)
-                cable_label = cable.get("label") or f"#{cable.get('id')}"
+        return jsonify({"nodes": nodes, "links": links})
 
-                edges.append({
-                    "from": if_node_a,
-                    "to": if_node_b,
-                    "label": cable_label,
-                    "arrows": "to;from",
-                    "length": 200, # Longer distance for cable
-                    "font": {"align": "top"}
-                })
-
-    return jsonify({"nodes": nodes, "edges": edges})
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=True)

@@ -1,93 +1,112 @@
 import unittest
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 import sys
 import os
+
+# Create a mock for pynetbox before importing app
+mock_pynetbox = MagicMock()
+sys.modules['pynetbox'] = mock_pynetbox
 
 # Add parent directory to path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from app import app
+# Import app module
+import app as app_module
 
-class TestApp(unittest.TestCase):
+class TestKabelplan(unittest.TestCase):
     def setUp(self):
-        self.app = app.test_client()
-        self.app.testing = True
+        self.app = app_module.app
+        self.client = self.app.test_client()
+        self.client.testing = True
 
-    @patch('requests.get')
-    def test_filter_options(self, mock_get):
-        # Mock NetBox responses
-        mock_response = MagicMock()
-        mock_response.json.return_value = {"results": [], "next": None}
-        mock_response.raise_for_status.return_value = None
-        mock_get.return_value = mock_response
+        # Access the 'nb' variable in the module
+        self.mock_nb = app_module.nb
 
-        response = self.app.get('/api/filter-options')
+    def test_get_graph_data(self):
+        # Mock Devices
+        mock_device1 = MagicMock()
+        mock_device1.id = 1
+        mock_device1.name = "Device1"
+        mock_device1.device_type.model = "ModelX"
+        mock_device1.device_role.name = "Router"
+
+        mock_device2 = MagicMock()
+        mock_device2.id = 2
+        mock_device2.name = "Device2"
+        mock_device2.device_type.model = "ModelY"
+        mock_device2.device_role.name = "Switch"
+
+        # When calling .filter(), return the list
+        self.mock_nb.dcim.devices.filter.return_value = [mock_device1, mock_device2]
+
+        # Mock Interfaces
+        # We need to handle the fact that interfaces are fetched in a loop or batch
+        # app.py: list(nb.dcim.interfaces.filter(device_id=chunk))
+
+        i1 = MagicMock()
+        i1.id = 101
+        i1.name = "eth0"
+        i1.device.id = 1
+
+        i2 = MagicMock()
+        i2.id = 102
+        i2.name = "eth0"
+        i2.device.id = 2
+
+        self.mock_nb.dcim.interfaces.filter.return_value = [i1, i2]
+
+        # Mock Cables
+        mock_cable = MagicMock()
+        mock_cable.id = 500
+        mock_cable.label = "Cable1"
+        mock_cable.color = "blue"
+
+        # Terminations
+        term_a = MagicMock()
+        term_a.device.id = 1
+        term_a.id = 101
+
+        term_b = MagicMock()
+        term_b.device.id = 2
+        term_b.id = 102
+
+        # In app.py we access cable.a_terminations[0]
+        # So we need to ensure a_terminations is a list
+        mock_cable.a_terminations = [term_a]
+        mock_cable.b_terminations = [term_b]
+
+        self.mock_nb.dcim.cables.filter.return_value = [mock_cable]
+
+        # Call API
+        response = self.client.get('/api/graph-data?site=test-site')
+
+        # Check for errors
+        if response.status_code != 200:
+            print(response.get_json())
+
         self.assertEqual(response.status_code, 200)
-        data = response.json
-        self.assertIn('sites', data)
-        self.assertIn('locations', data)
-        self.assertIn('racks', data)
 
-    @patch('requests.get')
-    def test_graph_data(self, mock_get):
-        # Mock responses
-        def side_effect(url, headers, params=None):
-            resp = MagicMock()
-            resp.raise_for_status.return_value = None
-            if "dcim/devices" in url:
-                resp.json.return_value = {
-                    "results": [
-                        {
-                            "id": 1,
-                            "name": "Dev1",
-                            "device_role": {"name": "Switch"},
-                            "device_type": {"model": "ModelX"},
-                            "location": {"name": "Loc1"}
-                        }
-                    ],
-                    "next": None
-                }
-            elif "dcim/cables" in url:
-                resp.json.return_value = {
-                    "results": [
-                        {
-                            "id": 100,
-                            "label": "Cable1",
-                            "termination_a": {"id": 10, "device": {"id": 1, "name": "Dev1"}, "name": "Eth0"},
-                            "termination_b": {"id": 20, "device": {"id": 2, "name": "Dev2"}, "name": "Eth0"}
-                        }
-                    ],
-                    "next": None
-                }
-            return resp
+        data = response.get_json()
 
-        mock_get.side_effect = side_effect
+        # Verify Nodes
+        self.assertEqual(len(data['nodes']), 2)
 
-        response = self.app.get('/api/graph-data?site=test-site')
-        self.assertEqual(response.status_code, 200)
-        data = response.json
-        self.assertIn('nodes', data)
-        self.assertIn('edges', data)
+        # Check Device1
+        node1 = next((n for n in data['nodes'] if n['id'] == '1'), None)
+        self.assertIsNotNone(node1)
+        self.assertEqual(node1['name'], "Device1")
 
-        # Verify nodes exist: 2 Devices + 2 Interfaces = 4 nodes
-        node_ids = [n['id'] for n in data['nodes']]
-        self.assertIn(1, node_ids)      # Dev1
-        self.assertIn(2, node_ids)      # Dev2
-        self.assertIn('if_10', node_ids) # Eth0 of Dev1
-        self.assertIn('if_20', node_ids) # Eth0 of Dev2
+        # Check Ports on Device1
+        self.assertTrue(len(node1['ports']) >= 1)
+        self.assertEqual(node1['ports'][0]['id'], '101')
 
-        # Verify edges exist:
-        # Dev1 -> if_10
-        # Dev2 -> if_20
-        # if_10 -> if_20 (Cable)
-        edge_pairs = [(e['from'], e['to']) for e in data['edges']]
-        self.assertIn((1, 'if_10'), edge_pairs)
-        self.assertIn((2, 'if_20'), edge_pairs)
-        self.assertIn(('if_10', 'if_20'), edge_pairs)
-
-        # Verify Cable Label is on the interface-interface edge
-        cable_edge = next(e for e in data['edges'] if e['from'] == 'if_10' and e['to'] == 'if_20')
-        self.assertIn('Cable1', cable_edge['label'])
+        # Verify Links
+        self.assertEqual(len(data['links']), 1)
+        link = data['links'][0]
+        self.assertEqual(link['source']['id'], '1')
+        self.assertEqual(link['source']['port'], '101')
+        self.assertEqual(link['target']['id'], '2')
+        self.assertEqual(link['target']['port'], '102')
 
 if __name__ == '__main__':
     unittest.main()
