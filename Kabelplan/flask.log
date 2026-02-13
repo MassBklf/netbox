@@ -24,3 +24,6 @@
 127.0.0.1 - - [12/Feb/2026 21:09:00] "GET / HTTP/1.1" 200 -
 127.0.0.1 - - [12/Feb/2026 21:09:00] "GET /static/css/style.css HTTP/1.1" 200 -
 127.0.0.1 - - [12/Feb/2026 21:09:00] "GET /static/js/kabelplan.js HTTP/1.1" 200 -
+127.0.0.1 - - [13/Feb/2026 19:18:32] "GET / HTTP/1.1" 200 -
+127.0.0.1 - - [13/Feb/2026 19:18:33] "GET /static/css/style.css HTTP/1.1" 200 -
+127.0.0.1 - - [13/Feb/2026 19:18:33] "GET /static/js/kabelplan.js HTTP/1.1" 200 -
