@@ -179,10 +179,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Export Graph (Basic SVG export)
     exportBtn.addEventListener('click', () => {
-        // JointJS doesn't have built-in image export in open source version easily without plugins?
-        // Actually we can convert SVG to Canvas to Image.
-        // For now, simpler: Open SVG in new tab or trigger download of SVG.
-
         const svg = paper.svg;
         const serializer = new XMLSerializer();
         const content = serializer.serializeToString(svg);
@@ -203,11 +199,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // 1. Create Nodes (Devices)
         data.nodes.forEach(nodeData => {
-            const width = 140;
-            // Height depends on number of ports?
-            // Let's set a minimum height and grow if many ports.
+            const width = 160; // Increased width for better label fit
+            // Increase height slightly to space out ports
             const portCount = nodeData.ports.length;
-            const height = Math.max(60, portCount * 20); // 20px per port
+            const height = Math.max(80, portCount * 25); // 25px per port for better spacing
 
             const device = new joint.shapes.standard.Rectangle();
             device.position(0, 0);
@@ -222,24 +217,21 @@ document.addEventListener('DOMContentLoaded', () => {
                 label: {
                     text: nodeData.name + '\n(' + nodeData.model + ')',
                     fill: '#0d47a1',
-                    fontSize: 12,
-                    fontWeight: 'bold'
+                    fontSize: 14,
+                    fontWeight: 'bold',
+                    textWrap: {
+                        width: width - 10,
+                        ellipsis: true
+                    }
                 }
             });
-            device.set('id', nodeData.id); // Set JointJS ID to match NetBox ID
+            device.set('id', nodeData.id);
 
             // Add Ports
             const portsIn = [];
             const portsOut = [];
 
-            // Heuristic: Distribute ports left/right.
-            // Real schematic logic is hard without specific "side" data.
-            // Let's put first half on left, second half on right?
-            // Or just all on right?
-            // Common convention: In left, Out right. But interfaces are bidirectional.
-            // Let's just put them all on the right for now (Rack style) or distribute.
-            // Let's distribute.
-
+            // Distribute ports
             nodeData.ports.forEach((port, index) => {
                 const portObj = {
                     id: port.id,
@@ -252,22 +244,36 @@ document.addEventListener('DOMContentLoaded', () => {
                 else portsOut.push(portObj);
             });
 
-            // Define port groups
+            // Define port groups with better label positioning
             device.set('ports', {
                 groups: {
                     'left': {
                         position: { name: 'left' },
                         attrs: {
-                            circle: { fill: '#ffffff', stroke: '#333333', strokeWidth: 1, r: 4 },
-                            text: { fill: '#000000', fontSize: 10, x: -10, y: 0, textAnchor: 'end' } // Label outside
+                            circle: { fill: '#ffffff', stroke: '#333333', strokeWidth: 1, r: 5 },
+                            text: {
+                                fill: '#000000',
+                                fontSize: 11, // Increased font size
+                                x: -12, // Move label further out
+                                y: 0,
+                                textAnchor: 'end',
+                                fontWeight: 'bold' // Bold labels
+                            }
                         },
                         label: { position: { name: 'left' } }
                     },
                     'right': {
                         position: { name: 'right' },
                         attrs: {
-                            circle: { fill: '#ffffff', stroke: '#333333', strokeWidth: 1, r: 4 },
-                            text: { fill: '#000000', fontSize: 10, x: 10, y: 0, textAnchor: 'start' } // Label outside
+                            circle: { fill: '#ffffff', stroke: '#333333', strokeWidth: 1, r: 5 },
+                            text: {
+                                fill: '#000000',
+                                fontSize: 11,
+                                x: 12,
+                                y: 0,
+                                textAnchor: 'start',
+                                fontWeight: 'bold'
+                            }
                         },
                         label: { position: { name: 'right' } }
                     }
@@ -290,11 +296,16 @@ document.addEventListener('DOMContentLoaded', () => {
                 const link = new joint.shapes.standard.Link();
                 link.source({ id: sourceId, port: sourcePort });
                 link.target({ id: targetId, port: targetPort });
+
+                // Tuned Manhattan Router
                 link.router('manhattan', {
-                    step: 10,
-                    padding: 20
+                    step: 20, // Grid step size
+                    padding: 30, // Padding around obstacles
+                    maximumLoops: 2000,
+                    excludeTypes: ['standard.Rectangle'] // Avoid routing through nodes
                 });
-                link.connector('rounded');
+
+                link.connector('rounded', { radius: 10 });
                 link.attr({
                     line: {
                         stroke: linkData.color || '#333333',
@@ -311,9 +322,13 @@ document.addEventListener('DOMContentLoaded', () => {
                             text: linkData.label
                         },
                         rect: {
-                            fill: '#ffffff'
+                            fill: '#ffffff',
+                            stroke: '#666',
+                            strokeWidth: 1,
+                            rx: 3, ry: 3
                         }
-                    }
+                    },
+                    position: 0.5 // Center label
                 }]);
                 cells.push(link);
             }
@@ -321,16 +336,16 @@ document.addEventListener('DOMContentLoaded', () => {
 
         graph.resetCells(cells);
 
-        // 3. Auto Layout
+        // 3. Auto Layout with increased spacing
         joint.layout.DirectedGraph.layout(graph, {
             dagre: dagre,
             graphlib: graphlib,
             setLinkVertices: false,
             rankDir: 'LR',
-            nodeSep: 80,
-            rankSep: 200,
-            marginX: 50,
-            marginY: 50
+            nodeSep: 150, // Increased horizontal separation
+            rankSep: 300, // Increased rank separation
+            marginX: 100,
+            marginY: 100
         });
 
         // Initial fit
