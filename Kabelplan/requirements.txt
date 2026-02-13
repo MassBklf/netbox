@@ -1,0 +1,4 @@
+Flask>=2.2
+requests>=2.31
+gunicorn>=21.2.0
+pynetbox>=7.0.0

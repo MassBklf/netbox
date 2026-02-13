@@ -1,0 +1,26 @@
+ * Serving Flask app 'app'
+ * Debug mode: on
+[31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on all addresses (0.0.0.0)
+ * Running on http://127.0.0.1:5000
+ * Running on http://192.168.0.2:5000
+[33mPress CTRL+C to quit[0m
+ * Restarting with stat
+ * Debugger is active!
+ * Debugger PIN: 436-511-457
+127.0.0.1 - - [12/Feb/2026 21:05:24] "GET / HTTP/1.1" 200 -
+127.0.0.1 - - [12/Feb/2026 21:06:02] "GET / HTTP/1.1" 200 -
+127.0.0.1 - - [12/Feb/2026 21:06:02] "GET /static/js/kabelplan.js HTTP/1.1" 200 -
+127.0.0.1 - - [12/Feb/2026 21:06:02] "GET /static/css/style.css HTTP/1.1" 200 -
+127.0.0.1 - - [12/Feb/2026 21:06:52] "GET / HTTP/1.1" 200 -
+127.0.0.1 - - [12/Feb/2026 21:06:52] "GET /static/css/style.css HTTP/1.1" 200 -
+127.0.0.1 - - [12/Feb/2026 21:06:52] "GET /static/js/kabelplan.js HTTP/1.1" 200 -
+127.0.0.1 - - [12/Feb/2026 21:07:35] "GET / HTTP/1.1" 200 -
+127.0.0.1 - - [12/Feb/2026 21:07:35] "GET /static/js/kabelplan.js HTTP/1.1" 200 -
+127.0.0.1 - - [12/Feb/2026 21:07:35] "GET /static/css/style.css HTTP/1.1" 200 -
+127.0.0.1 - - [12/Feb/2026 21:08:17] "GET / HTTP/1.1" 200 -
+127.0.0.1 - - [12/Feb/2026 21:08:17] "GET /static/css/style.css HTTP/1.1" 200 -
+127.0.0.1 - - [12/Feb/2026 21:08:17] "GET /static/js/kabelplan.js HTTP/1.1" 200 -
+127.0.0.1 - - [12/Feb/2026 21:09:00] "GET / HTTP/1.1" 200 -
+127.0.0.1 - - [12/Feb/2026 21:09:00] "GET /static/css/style.css HTTP/1.1" 200 -
+127.0.0.1 - - [12/Feb/2026 21:09:00] "GET /static/js/kabelplan.js HTTP/1.1" 200 -
