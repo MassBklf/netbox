@@ -10,66 +10,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
     let allLocations = [];
     let allRacks = [];
-
-    // JointJS Setup
-    const graph = new joint.dia.Graph();
-    const paper = new joint.dia.Paper({
-        el: container,
-        model: graph,
-        width: '100%',
-        height: '100%',
-        gridSize: 10,
-        drawGrid: true,
-        background: {
-            color: '#fafafa'
-        },
-        interactive: { linkMove: false }, // Prevent moving links manually
-        defaultLink: new joint.shapes.standard.Link({
-            attrs: {
-                line: {
-                    stroke: '#333333',
-                    strokeWidth: 2
-                }
-            }
-        })
-    });
-
-    // Zoom/Pan State
-    let scale = 1;
-    let currentX = 0;
-    let currentY = 0;
-
-    // Pan
-    paper.on('blank:pointerdown', (evt, x, y) => {
-        const scale = paper.scale();
-        evt.data = { x: x * scale.sx, y: y * scale.sy };
-    });
-
-    paper.on('blank:pointermove', (evt, x, y) => {
-        if (evt.data) {
-            const scale = paper.scale();
-            const nextX = x * scale.sx;
-            const nextY = y * scale.sy;
-            currentX += nextX - evt.data.x;
-            currentY += nextY - evt.data.y;
-            paper.translate(currentX, currentY);
-            evt.data.x = nextX;
-            evt.data.y = nextY;
-        }
-    });
-
-    paper.on('blank:pointerup', (evt) => {
-        delete evt.data;
-    });
-
-    // Zoom
-    container.addEventListener('wheel', (event) => {
-        event.preventDefault();
-        const delta = Math.sign(event.deltaY) * -0.1;
-        scale = Math.max(0.1, Math.min(3, scale + delta));
-        paper.scale(scale, scale);
-    });
-
+    let panZoomInstance = null;
+    let currentSvgData = null;
 
     // Initialize Selects
     fetch('/api/filter-options')
@@ -120,7 +62,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
-    // Load Graph
+    // Load Graph (SVG)
     loadBtn.addEventListener('click', () => {
         const siteSlug = siteSelect.value;
         const locationId = locationSelect.value;
@@ -132,14 +74,11 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         loader.classList.remove('d-none');
-        graph.clear(); // Clear existing graph
-
-        // Reset View
-        scale = 1;
-        currentX = 0;
-        currentY = 0;
-        paper.scale(1, 1);
-        paper.translate(0, 0);
+        container.innerHTML = ''; // Clear container
+        if (panZoomInstance) {
+            panZoomInstance.destroy();
+            panZoomInstance = null;
+        }
 
         const params = new URLSearchParams({
             site: siteSlug
@@ -147,17 +86,40 @@ document.addEventListener('DOMContentLoaded', () => {
         if (locationId) params.append('location', locationId);
         if (rackId) params.append('rack', rackId);
 
-        fetch(`/api/graph-data?${params.toString()}`)
-            .then(response => response.json())
-            .then(data => {
-                loader.classList.add('d-none');
+        fetch(`/api/graph-svg?${params.toString()}`)
+            .then(response => {
+                if (!response.ok) throw new Error('Network response was not ok');
+                return response.blob();
+            })
+            .then(blob => {
+                const reader = new FileReader();
+                reader.onloadend = function() {
+                    const svgContent = reader.result;
+                    // FileReader returns data URL if using readAsDataURL, but we want text for innerHTML
+                    // Let's use text() method of blob
+                    blob.text().then(text => {
+                        loader.classList.add('d-none');
+                        container.innerHTML = text;
+                        currentSvgData = text;
 
-                if (data.nodes.length === 0) {
-                    alert('Keine Daten für diese Auswahl gefunden.');
-                    return;
+                        // Find the SVG element and enable pan-zoom
+                        const svgElement = container.querySelector('svg');
+                        if (svgElement) {
+                            svgElement.setAttribute('width', '100%');
+                            svgElement.setAttribute('height', '100%');
+
+                            panZoomInstance = svgPanZoom(svgElement, {
+                                zoomEnabled: true,
+                                controlIconsEnabled: true,
+                                fit: true,
+                                center: true
+                            });
+                        } else {
+                            alert('Keine SVG-Daten empfangen.');
+                        }
+                    });
                 }
-
-                buildGraph(data);
+                reader.readAsDataURL(blob); // Actually just triggering the blob read flow or use blob.text()
             })
             .catch(err => {
                 console.error('Error loading graph:', err);
@@ -168,21 +130,17 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Fit Graph
     fitBtn.addEventListener('click', () => {
-        paper.scaleContentToFit({ padding: 50 });
-        // Update local state to match fit
-        const t = paper.translate();
-        const s = paper.scale();
-        currentX = t.tx;
-        currentY = t.ty;
-        scale = s.sx;
+        if (panZoomInstance) {
+            panZoomInstance.fit();
+            panZoomInstance.center();
+        }
     });
 
-    // Export Graph (Basic SVG export)
+    // Export SVG
     exportBtn.addEventListener('click', () => {
-        const svg = paper.svg;
-        const serializer = new XMLSerializer();
-        const content = serializer.serializeToString(svg);
-        const blob = new Blob([content], { type: 'image/svg+xml' });
+        if (!currentSvgData) return;
+
+        const blob = new Blob([currentSvgData], { type: 'image/svg+xml' });
         const url = URL.createObjectURL(blob);
 
         const link = document.createElement('a');
@@ -192,168 +150,4 @@ document.addEventListener('DOMContentLoaded', () => {
         link.click();
         document.body.removeChild(link);
     });
-
-    function buildGraph(data) {
-        const cells = [];
-        const deviceMap = {};
-
-        // 1. Create Nodes (Devices)
-        data.nodes.forEach(nodeData => {
-            const width = 160; // Increased width for better label fit
-            // Increase height slightly to space out ports
-            const portCount = nodeData.ports.length;
-            const height = Math.max(80, portCount * 25); // 25px per port for better spacing
-
-            const device = new joint.shapes.standard.Rectangle();
-            device.position(0, 0);
-            device.resize(width, height);
-            device.attr({
-                body: {
-                    fill: '#E3F2FD',
-                    stroke: '#2196F3',
-                    strokeWidth: 2,
-                    rx: 5, ry: 5
-                },
-                label: {
-                    text: nodeData.name + '\n(' + nodeData.model + ')',
-                    fill: '#0d47a1',
-                    fontSize: 14,
-                    fontWeight: 'bold',
-                    textWrap: {
-                        width: width - 10,
-                        ellipsis: true
-                    }
-                }
-            });
-            device.set('id', nodeData.id);
-
-            // Add Ports
-            const portsIn = [];
-            const portsOut = [];
-
-            // Distribute ports
-            nodeData.ports.forEach((port, index) => {
-                const portObj = {
-                    id: port.id,
-                    group: index % 2 === 0 ? 'left' : 'right',
-                    attrs: {
-                        label: { text: port.name }
-                    }
-                };
-                if (index % 2 === 0) portsIn.push(portObj);
-                else portsOut.push(portObj);
-            });
-
-            // Define port groups with better label positioning
-            device.set('ports', {
-                groups: {
-                    'left': {
-                        position: { name: 'left' },
-                        attrs: {
-                            circle: { fill: '#ffffff', stroke: '#333333', strokeWidth: 1, r: 5 },
-                            text: {
-                                fill: '#000000',
-                                fontSize: 11, // Increased font size
-                                x: -12, // Move label further out
-                                y: 0,
-                                textAnchor: 'end',
-                                fontWeight: 'bold' // Bold labels
-                            }
-                        },
-                        label: { position: { name: 'left' } }
-                    },
-                    'right': {
-                        position: { name: 'right' },
-                        attrs: {
-                            circle: { fill: '#ffffff', stroke: '#333333', strokeWidth: 1, r: 5 },
-                            text: {
-                                fill: '#000000',
-                                fontSize: 11,
-                                x: 12,
-                                y: 0,
-                                textAnchor: 'start',
-                                fontWeight: 'bold'
-                            }
-                        },
-                        label: { position: { name: 'right' } }
-                    }
-                },
-                items: [...portsIn, ...portsOut]
-            });
-
-            cells.push(device);
-            deviceMap[nodeData.id] = device;
-        });
-
-        // 2. Create Links (Cables)
-        data.links.forEach(linkData => {
-            const sourceId = linkData.source.id;
-            const sourcePort = linkData.source.port;
-            const targetId = linkData.target.id;
-            const targetPort = linkData.target.port;
-
-            if (deviceMap[sourceId] && deviceMap[targetId]) {
-                const link = new joint.shapes.standard.Link();
-                link.source({ id: sourceId, port: sourcePort });
-                link.target({ id: targetId, port: targetPort });
-
-                // Tuned Manhattan Router
-                link.router('manhattan', {
-                    step: 20, // Grid step size
-                    padding: 30, // Padding around obstacles
-                    maximumLoops: 2000,
-                    excludeTypes: ['standard.Rectangle'] // Avoid routing through nodes
-                });
-
-                link.connector('rounded', { radius: 10 });
-                link.attr({
-                    line: {
-                        stroke: linkData.color || '#333333',
-                        strokeWidth: 2,
-                        targetMarker: {
-                            type: 'path',
-                            d: 'M 10 -5 0 0 10 5 z'
-                        }
-                    }
-                });
-                link.labels([{
-                    attrs: {
-                        text: {
-                            text: linkData.label
-                        },
-                        rect: {
-                            fill: '#ffffff',
-                            stroke: '#666',
-                            strokeWidth: 1,
-                            rx: 3, ry: 3
-                        }
-                    },
-                    position: 0.5 // Center label
-                }]);
-                cells.push(link);
-            }
-        });
-
-        graph.resetCells(cells);
-
-        // 3. Auto Layout with increased spacing
-        joint.layout.DirectedGraph.layout(graph, {
-            dagre: dagre,
-            graphlib: graphlib,
-            setLinkVertices: false,
-            rankDir: 'LR',
-            nodeSep: 150, // Increased horizontal separation
-            rankSep: 300, // Increased rank separation
-            marginX: 100,
-            marginY: 100
-        });
-
-        // Initial fit
-        paper.scaleContentToFit({ padding: 50 });
-        const t = paper.translate();
-        const s = paper.scale();
-        currentX = t.tx;
-        currentY = t.ty;
-        scale = s.sx;
-    }
 });

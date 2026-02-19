@@ -1,6 +1,8 @@
 import os
 import pynetbox
-from flask import Flask, render_template, request, jsonify
+from flask import Flask, render_template, request, jsonify, make_response
+import graphviz
+import io
 
 # Configuration
 NETBOX_URL = os.getenv("NETBOX_URL", "http://localhost:8000")
@@ -31,10 +33,10 @@ def get_filter_options():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-@app.route("/api/graph-data")
-def get_graph_data():
+@app.route("/api/graph-svg")
+def get_graph_svg():
     """
-    Fetches devices and cables based on filters and returns graph data.
+    Fetches devices and cables based on filters and returns a Graphviz SVG.
     """
     site_slug = request.args.get("site")
     location_id = request.args.get("location")
@@ -53,75 +55,77 @@ def get_graph_data():
 
         devices = list(nb.dcim.devices.filter(**device_filter))
 
-        nodes = []
-        device_ids = set()
+        if not devices:
+             return jsonify({"error": "No devices found"}), 404
 
-        # We need to fetch interfaces for these devices to create ports
-        # Optimization: Fetch all interfaces for the site and filter in memory if needed,
-        # or fetch per device (slow). Better: fetch interfaces for devices in list.
-        # pynetbox filter 'device_id' accepts a list.
+        # Initialize Graphviz Digraph
+        dot = graphviz.Digraph(comment='NetBox Kabelplan', format='svg')
+        dot.attr(rankdir='LR', splines='ortho', nodesep='1.0', ranksep='2.0', layout='dot')
+        dot.attr('node', shape='none', fontname='Helvetica', fontsize='12')
+        dot.attr('edge', fontname='Helvetica', fontsize='10')
+
+        device_ids = set()
+        device_ports = {} # device_id -> [port_obj, ...]
+        device_map = {} # device_id -> device_obj
 
         device_id_list = [d.id for d in devices]
-        if not device_id_list:
-             return jsonify({"nodes": [], "links": []})
 
-        # Process Devices
-        for d in devices:
-            device_ids.add(str(d.id))
-            nodes.append({
-                "id": str(d.id),
-                "name": d.name or f"Device {d.id}",
-                "model": d.device_type.model if d.device_type else "Unknown",
-                "role": d.device_role.name if d.device_role else "Unknown",
-                "ports": [] # Will be populated
-            })
-
-        # 2. Fetch Interfaces (Ports)
-        # Fetching interfaces for all devices in scope
-        # We process in chunks to avoid URL length issues if many devices
+        # Pre-fetch interfaces for layout
         interfaces = []
         chunk_size = 50
         for i in range(0, len(device_id_list), chunk_size):
             chunk = device_id_list[i:i+chunk_size]
             interfaces.extend(list(nb.dcim.interfaces.filter(device_id=chunk)))
 
-        # Map interfaces to device nodes
-        interface_map = {} # id -> {name, device_id}
-
-        node_map = {n["id"]: n for n in nodes}
-
         for i in interfaces:
             d_id = str(i.device.id)
-            if d_id in node_map:
-                port_data = {
-                    "id": str(i.id),
-                    "name": i.name,
-                    "type": "copper" # simplistic type
-                }
-                node_map[d_id]["ports"].append(port_data)
-                interface_map[i.id] = {"name": i.name, "device_id": d_id}
+            if d_id not in device_ports:
+                device_ports[d_id] = []
+            device_ports[d_id].append(i)
 
-        # 3. Fetch Cables
-        # We fetch cables connected to our devices
-        # Similar chunk approach or fetch by site
+        # 2. Create Nodes
+        for d in devices:
+            d_id = str(d.id)
+            device_ids.add(d_id)
+            device_map[d_id] = d
+
+            ports = device_ports.get(d_id, [])
+            ports.sort(key=lambda x: x.name)
+
+            # Create HTML-like label table
+            # We use a table to represent the device and its ports
+            # <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0"> ... </TABLE>
+
+            label = '<<TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" BGCOLOR="#E3F2FD">'
+            # Header
+            label += f'<TR><TD COLSPAN="2" BGCOLOR="#2196F3" PORT="header"><FONT COLOR="white"><B>{d.name}</B><BR/>({d.device_type.model})</FONT></TD></TR>'
+
+            # Ports
+            for p in ports:
+                p_id = str(p.id)
+                # Escape port name for HTML
+                p_name = p.name.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+                # Important: PORT attribute is used for connection
+                label += f'<TR><TD PORT="p{p_id}" ALIGN="LEFT" BALIGN="LEFT"> {p_name} </TD><TD ALIGN="RIGHT"> </TD></TR>'
+
+            label += '</TABLE>>'
+
+            dot.node(d_id, label=label)
+
+        # 3. Create Edges (Cables)
+        # We need to fetch cables relevant to these devices.
+        # Fetching all site cables can be heavy, but filtering by device list is tedious.
+        # Let's fetch all site cables and filter in memory as before.
         cables = list(nb.dcim.cables.filter(site=site_slug))
 
-        links = []
-
         for cable in cables:
-            # We only care if both ends are in our scope (or at least one if we want to show external links)
-            # For now, let's show links where at least one end is in our device list.
-
             term_a = cable.a_terminations[0] if cable.a_terminations else None
             term_b = cable.b_terminations[0] if cable.b_terminations else None
 
             if not term_a or not term_b:
                 continue
 
-            # Helper to get device/interface ID
-            # In pynetbox, terminations are objects. We check if they are interfaces.
-            # Assuming 'dcim.interface' type.
-
+            # Helper
             def get_term_info(term):
                 if hasattr(term, 'device') and hasattr(term, 'id'):
                     return str(term.device.id), str(term.id)
@@ -131,22 +135,28 @@ def get_graph_data():
             dev_b_id, int_b_id = get_term_info(term_b)
 
             if dev_a_id and dev_b_id:
-                # Check if visible
+                # Check visibility
                 visible_a = dev_a_id in device_ids
                 visible_b = dev_b_id in device_ids
 
                 if visible_a and visible_b:
-                    links.append({
-                        "id": str(cable.id),
-                        "source": {"id": dev_a_id, "port": int_a_id},
-                        "target": {"id": dev_b_id, "port": int_b_id},
-                        "label": cable.label or f"#{cable.id}",
-                        "color": cable.color or "black"
-                    })
-                # Note: Handling external links (one end visible) requires adding "External Node" logic
-                # For this iteration, we stick to internal links.
+                    # Graphviz record ports: node:port
+                    source = f"{dev_a_id}:p{int_a_id}"
+                    target = f"{dev_b_id}:p{int_b_id}"
 
-        return jsonify({"nodes": nodes, "links": links})
+                    label = cable.label or ""
+                    color = cable.color or "black"
+                    if color and not color.startswith("#") and not color in ['black', 'red', 'blue', 'green']:
+                         color = "black" # Fallback
+
+                    dot.edge(source, target, label=label, color=color, penwidth='2.0')
+
+        # Render to SVG
+        svg_bytes = dot.pipe()
+
+        response = make_response(svg_bytes)
+        response.headers['Content-Type'] = 'image/svg+xml'
+        return response
 
     except Exception as e:
         import traceback

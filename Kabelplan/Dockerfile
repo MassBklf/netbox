@@ -9,9 +9,11 @@ ENV PYTHONUNBUFFERED=1
 WORKDIR /app
 
 # System-Abhängigkeiten
+# graphviz ist erforderlich für die Bibliothek
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         gcc \
+        graphviz \
     && rm -rf /var/lib/apt/lists/*
 
 # Python-Abhängigkeiten
