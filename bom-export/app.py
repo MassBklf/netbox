@@ -62,6 +62,11 @@ def export():
     site_slug = request.form.get("site_slug")
     site_name = request.form.get("site_name")
 
+    # Checkboxes
+    include_serial = request.form.get("include_serial")
+    include_asset_tag = request.form.get("include_asset_tag")
+    include_primary_ip = request.form.get("include_primary_ip")
+
     devices = get_all_results(
         "dcim/devices/",
         params={"site": site_slug, "limit": 1000}
@@ -69,6 +74,10 @@ def export():
 
     rows = []
     for d in devices:
+        primary_ip = ""
+        if d.get("primary_ip") and d["primary_ip"].get("address"):
+            primary_ip = d["primary_ip"]["address"].split("/")[0]
+
         rows.append({
             "Location": d["location"]["name"] if d.get("location") else "",
             "Rack": d["rack"]["name"] if d.get("rack") else "",
@@ -84,6 +93,8 @@ def export():
                 else ""
             ),
             "Serial Number": d.get("serial", ""),
+            "Asset Tag": d.get("asset_tag") or "",
+            "Primary IP": primary_ip,
             "Role": (
                 d["role"]["name"]
                 if d.get("role")
@@ -113,10 +124,29 @@ def export():
                     top=Side(style='thin'),
                     bottom=Side(style='thin'))
 
+    # Build dynamic columns
+    # List of (Header Name, Dictionary Key)
+    columns_config = [
+        ("Device Name", "Device Name"),
+        ("Manufacturer", "Manufacturer"),
+        ("Device Type", "Device Type"),
+    ]
+
+    if include_serial:
+        columns_config.append(("Serial Number", "Serial Number"))
+    if include_asset_tag:
+        columns_config.append(("Asset Tag", "Asset Tag"))
+    if include_primary_ip:
+        columns_config.append(("Primary IP", "Primary IP"))
+
+    columns_config.append(("Role", "Role"))
+
+    total_cols = len(columns_config)
+
     current_row = 1
 
     # 1. Site Header
-    ws.merge_cells(start_row=current_row, start_column=1, end_row=current_row, end_column=5)
+    ws.merge_cells(start_row=current_row, start_column=1, end_row=current_row, end_column=total_cols)
     cell = ws.cell(row=current_row, column=1, value=f"Site: {site_name}")
     cell.font = site_header_font
     cell.alignment = center_alignment
@@ -131,7 +161,7 @@ def export():
         # 2. Location Header
         display_location = location if location else "No Location"
 
-        ws.merge_cells(start_row=current_row, start_column=1, end_row=current_row, end_column=5)
+        ws.merge_cells(start_row=current_row, start_column=1, end_row=current_row, end_column=total_cols)
         cell = ws.cell(row=current_row, column=1, value=f"Location: {display_location}")
         cell.font = location_header_font
         cell.alignment = left_alignment
@@ -144,7 +174,7 @@ def export():
 
             # 3. Rack Header (only if rack exists)
             if rack:
-                ws.merge_cells(start_row=current_row, start_column=1, end_row=current_row, end_column=5)
+                ws.merge_cells(start_row=current_row, start_column=1, end_row=current_row, end_column=total_cols)
                 cell = ws.cell(row=current_row, column=1, value=f"Rack: {rack}")
                 cell.font = rack_header_font
                 cell.alignment = left_alignment
@@ -152,8 +182,7 @@ def export():
                 current_row += 1
 
             # 4. Column Headers
-            headers = ["Device Name", "Manufacturer", "Device Type", "Serial Number", "Role"]
-            for col_idx, header in enumerate(headers, 1):
+            for col_idx, (header, key) in enumerate(columns_config, 1):
                 cell = ws.cell(row=current_row, column=col_idx, value=header)
                 cell.font = header_font
                 cell.border = border
@@ -161,11 +190,9 @@ def export():
 
             # 5. Device Rows
             for d in rack_devices:
-                ws.cell(row=current_row, column=1, value=d["Device Name"]).border = border
-                ws.cell(row=current_row, column=2, value=d["Manufacturer"]).border = border
-                ws.cell(row=current_row, column=3, value=d["Device Type"]).border = border
-                ws.cell(row=current_row, column=4, value=d["Serial Number"]).border = border
-                ws.cell(row=current_row, column=5, value=d["Role"]).border = border
+                for col_idx, (header, key) in enumerate(columns_config, 1):
+                    val = d.get(key, "")
+                    ws.cell(row=current_row, column=col_idx, value=val).border = border
                 current_row += 1
 
             # Space between groups
