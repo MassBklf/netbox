@@ -47,6 +47,16 @@ def get_all_results(endpoint, params=None):
     return results
 
 
+def get_custom_fields():
+    """Holt alle Custom Fields für Devices"""
+    try:
+        # NetBox API filter for content type 'dcim.device'
+        fields = get_all_results("extras/custom-fields/", params={"content_type": "dcim.device"})
+        return sorted(fields, key=lambda f: f["label"] or f["name"])
+    except Exception:
+        return []
+
+
 # ======================
 # Routes
 # ======================
@@ -54,7 +64,10 @@ def get_all_results(endpoint, params=None):
 def index():
     sites = get_all_results("dcim/sites/")
     sites = sorted(sites, key=lambda s: s["name"])
-    return render_template("index.html", sites=sites, netbox_url=NETBOX_URL)
+
+    custom_fields = get_custom_fields()
+
+    return render_template("index.html", sites=sites, netbox_url=NETBOX_URL, custom_fields=custom_fields)
 
 
 @app.route("/bom-export/export", methods=["POST"])
@@ -67,10 +80,16 @@ def export():
     include_asset_tag = request.form.get("include_asset_tag")
     include_primary_ip = request.form.get("include_primary_ip")
 
+    # Custom Fields from form
+    selected_custom_fields = request.form.getlist("custom_fields")
+
     devices = get_all_results(
         "dcim/devices/",
         params={"site": site_slug, "limit": 1000}
     )
+
+    # Get definitions to map names to labels if needed, or just use names
+    # For efficiency we might just use the names passed from form
 
     rows = []
     for d in devices:
@@ -99,7 +118,8 @@ def export():
                 d["role"]["name"]
                 if d.get("role")
                 else ""
-            )
+            ),
+            "custom_fields": d.get("custom_fields", {})
         })
 
     # Sort for grouping
@@ -138,6 +158,17 @@ def export():
         columns_config.append(("Asset Tag", "Asset Tag"))
     if include_primary_ip:
         columns_config.append(("Primary IP", "Primary IP"))
+
+    # Custom Fields
+    # The form sends "field_name|field_label" or just "field_name"
+    # To keep it simple, let's assume we pass "name|label" in the checkbox value
+    for cf_str in selected_custom_fields:
+        if "|" in cf_str:
+            name, label = cf_str.split("|", 1)
+        else:
+            name = cf_str
+            label = cf_str
+        columns_config.append((label, f"cf_{name}"))
 
     columns_config.append(("Role", "Role"))
 
@@ -191,8 +222,19 @@ def export():
             # 5. Device Rows
             for d in rack_devices:
                 for col_idx, (header, key) in enumerate(columns_config, 1):
-                    val = d.get(key, "")
-                    ws.cell(row=current_row, column=col_idx, value=val).border = border
+                    # Handle Custom Fields
+                    if key.startswith("cf_"):
+                        cf_name = key[3:]
+                        val = d.get("custom_fields", {}).get(cf_name, "")
+                        # Flatten if value is list or dict? (NetBox CFs can be complex)
+                        if isinstance(val, dict) and "label" in val:
+                            val = val["label"]
+                        elif isinstance(val, list):
+                            val = ", ".join([str(v) for v in val])
+                    else:
+                        val = d.get(key, "")
+
+                    ws.cell(row=current_row, column=col_idx, value=str(val) if val is not None else "").border = border
                 current_row += 1
 
             # Space between groups

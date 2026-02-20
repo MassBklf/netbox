@@ -78,6 +78,14 @@
             <input type="checkbox" id="primary_ip" name="include_primary_ip">
             <label for="primary_ip">IP-Adresse</label>
         </div>
+
+        {% for cf in custom_fields %}
+        <div>
+            <!-- Value format: name|label -->
+            <input type="checkbox" id="cf_{{ cf.name }}" name="custom_fields" value="{{ cf.name }}|{{ cf.label or cf.name }}">
+            <label for="cf_{{ cf.name }}">{{ cf.label or cf.name }} (Custom Field)</label>
+        </div>
+        {% endfor %}
     </fieldset>
 
     <br><br>
