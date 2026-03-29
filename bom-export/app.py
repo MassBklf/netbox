@@ -47,6 +47,16 @@ def get_all_results(endpoint, params=None):
     return results
 
 
+def get_custom_fields():
+    """Holt alle Custom Fields für Devices"""
+    try:
+        # NetBox API filter for content type 'dcim.device'
+        fields = get_all_results("extras/custom-fields/", params={"content_type": "dcim.device"})
+        return sorted(fields, key=lambda f: f["label"] or f["name"])
+    except Exception:
+        return []
+
+
 # ======================
 # Routes
 # ======================
@@ -54,7 +64,10 @@ def get_all_results(endpoint, params=None):
 def index():
     sites = get_all_results("dcim/sites/")
     sites = sorted(sites, key=lambda s: s["name"])
-    return render_template("index.html", sites=sites)
+
+    custom_fields = get_custom_fields()
+
+    return render_template("index.html", sites=sites, netbox_url=NETBOX_URL, custom_fields=custom_fields)
 
 
 @app.route("/bom-export/export", methods=["POST"])
@@ -62,13 +75,28 @@ def export():
     site_slug = request.form.get("site_slug")
     site_name = request.form.get("site_name")
 
+    # Checkboxes
+    include_serial = request.form.get("include_serial")
+    include_asset_tag = request.form.get("include_asset_tag")
+    include_primary_ip = request.form.get("include_primary_ip")
+
+    # Custom Fields from form
+    selected_custom_fields = request.form.getlist("custom_fields")
+
     devices = get_all_results(
         "dcim/devices/",
         params={"site": site_slug, "limit": 1000}
     )
 
+    # Get definitions to map names to labels if needed, or just use names
+    # For efficiency we might just use the names passed from form
+
     rows = []
     for d in devices:
+        primary_ip = ""
+        if d.get("primary_ip") and d["primary_ip"].get("address"):
+            primary_ip = d["primary_ip"]["address"].split("/")[0]
+
         rows.append({
             "Location": d["location"]["name"] if d.get("location") else "",
             "Rack": d["rack"]["name"] if d.get("rack") else "",
@@ -84,11 +112,14 @@ def export():
                 else ""
             ),
             "Serial Number": d.get("serial", ""),
+            "Asset Tag": d.get("asset_tag") or "",
+            "Primary IP": primary_ip,
             "Role": (
                 d["role"]["name"]
                 if d.get("role")
                 else ""
-            )
+            ),
+            "custom_fields": d.get("custom_fields", {})
         })
 
     # Sort for grouping
@@ -113,10 +144,40 @@ def export():
                     top=Side(style='thin'),
                     bottom=Side(style='thin'))
 
+    # Build dynamic columns
+    # List of (Header Name, Dictionary Key)
+    columns_config = [
+        ("Device Name", "Device Name"),
+        ("Manufacturer", "Manufacturer"),
+        ("Device Type", "Device Type"),
+    ]
+
+    if include_serial:
+        columns_config.append(("Serial Number", "Serial Number"))
+    if include_asset_tag:
+        columns_config.append(("Asset Tag", "Asset Tag"))
+    if include_primary_ip:
+        columns_config.append(("Primary IP", "Primary IP"))
+
+    # Custom Fields
+    # The form sends "field_name|field_label" or just "field_name"
+    # To keep it simple, let's assume we pass "name|label" in the checkbox value
+    for cf_str in selected_custom_fields:
+        if "|" in cf_str:
+            name, label = cf_str.split("|", 1)
+        else:
+            name = cf_str
+            label = cf_str
+        columns_config.append((label, f"cf_{name}"))
+
+    columns_config.append(("Role", "Role"))
+
+    total_cols = len(columns_config)
+
     current_row = 1
 
     # 1. Site Header
-    ws.merge_cells(start_row=current_row, start_column=1, end_row=current_row, end_column=5)
+    ws.merge_cells(start_row=current_row, start_column=1, end_row=current_row, end_column=total_cols)
     cell = ws.cell(row=current_row, column=1, value=f"Site: {site_name}")
     cell.font = site_header_font
     cell.alignment = center_alignment
@@ -131,7 +192,7 @@ def export():
         # 2. Location Header
         display_location = location if location else "No Location"
 
-        ws.merge_cells(start_row=current_row, start_column=1, end_row=current_row, end_column=5)
+        ws.merge_cells(start_row=current_row, start_column=1, end_row=current_row, end_column=total_cols)
         cell = ws.cell(row=current_row, column=1, value=f"Location: {display_location}")
         cell.font = location_header_font
         cell.alignment = left_alignment
@@ -144,7 +205,7 @@ def export():
 
             # 3. Rack Header (only if rack exists)
             if rack:
-                ws.merge_cells(start_row=current_row, start_column=1, end_row=current_row, end_column=5)
+                ws.merge_cells(start_row=current_row, start_column=1, end_row=current_row, end_column=total_cols)
                 cell = ws.cell(row=current_row, column=1, value=f"Rack: {rack}")
                 cell.font = rack_header_font
                 cell.alignment = left_alignment
@@ -152,8 +213,7 @@ def export():
                 current_row += 1
 
             # 4. Column Headers
-            headers = ["Device Name", "Manufacturer", "Device Type", "Serial Number", "Role"]
-            for col_idx, header in enumerate(headers, 1):
+            for col_idx, (header, key) in enumerate(columns_config, 1):
                 cell = ws.cell(row=current_row, column=col_idx, value=header)
                 cell.font = header_font
                 cell.border = border
@@ -161,11 +221,20 @@ def export():
 
             # 5. Device Rows
             for d in rack_devices:
-                ws.cell(row=current_row, column=1, value=d["Device Name"]).border = border
-                ws.cell(row=current_row, column=2, value=d["Manufacturer"]).border = border
-                ws.cell(row=current_row, column=3, value=d["Device Type"]).border = border
-                ws.cell(row=current_row, column=4, value=d["Serial Number"]).border = border
-                ws.cell(row=current_row, column=5, value=d["Role"]).border = border
+                for col_idx, (header, key) in enumerate(columns_config, 1):
+                    # Handle Custom Fields
+                    if key.startswith("cf_"):
+                        cf_name = key[3:]
+                        val = d.get("custom_fields", {}).get(cf_name, "")
+                        # Flatten if value is list or dict? (NetBox CFs can be complex)
+                        if isinstance(val, dict) and "label" in val:
+                            val = val["label"]
+                        elif isinstance(val, list):
+                            val = ", ".join([str(v) for v in val])
+                    else:
+                        val = d.get(key, "")
+
+                    ws.cell(row=current_row, column=col_idx, value=str(val) if val is not None else "").border = border
                 current_row += 1
 
             # Space between groups
